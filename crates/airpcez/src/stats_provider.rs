@@ -3,7 +3,7 @@ use airpcez_core::stats::StatsProvider;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct LocalStats { pub name: String, pub role: Role }
+pub struct LocalStats { pub name: String, pub role: Role, pub llama_dir: Option<String> }
 
 #[cfg(target_os = "macos")]
 fn real_free_ram_mib(fallback_mib: u64) -> u64 {
@@ -35,7 +35,7 @@ impl StatsProvider for LocalStats {
             cpu_logical,
             devices,
             rpc_endpoint: None,
-            binary_version: None,
+            binary_version: crate::version::detect_binary_version(self.llama_dir.as_deref()),
             running: false,
             sampled_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         }

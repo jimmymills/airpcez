@@ -15,6 +15,7 @@ async fn main() {
     let provider = Arc::new(LocalStats {
         name: config.node_name.clone(),
         role: config.role,
+        llama_dir: config.llama_dir.clone(),
     });
     let state = AppState {
         provider,
