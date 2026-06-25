@@ -40,6 +40,14 @@ impl Default for TokioSupervisor {
 
 impl ProcessBackend for TokioSupervisor {
     fn start(&self, spec: ProcSpec) -> Result<(), String> {
+        // Guard: reject if a process is already running
+        {
+            let g = self.inner.lock().unwrap();
+            if matches!(g.status, ProcStatus::Running) {
+                return Err("a process is already running".into());
+            }
+        }
+
         let mut child = Command::new(&spec.program)
             .args(&spec.args)
             .stdout(std::process::Stdio::piped())

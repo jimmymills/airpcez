@@ -20,3 +20,12 @@ async fn stop_terminates_running_child() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(matches!(sup.status(), ProcStatus::Stopped));
 }
+
+#[tokio::test]
+async fn rejects_start_while_running() {
+    let sup = TokioSupervisor::new();
+    sup.start(ProcSpec { program: "sleep".into(), args: vec!["30".into()] }).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(sup.start(ProcSpec { program: "sleep".into(), args: vec!["30".into()] }).is_err());
+    sup.stop();
+}
