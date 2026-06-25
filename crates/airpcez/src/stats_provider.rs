@@ -23,7 +23,7 @@ impl StatsProvider for LocalStats {
             rpc_endpoint: None,
             binary_version: None,
             running: false,
-            sampled_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            sampled_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         }
     }
 }
