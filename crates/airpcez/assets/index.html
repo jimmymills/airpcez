@@ -206,7 +206,6 @@
               <label for="launch-cpu-moe">CPU MoE (--cpu-moe)</label>
               <select id="launch-cpu-moe">
                 <option value="">off (default)</option>
-                <option value="off">off</option>
                 <option value="all">all</option>
                 <option value="custom">custom number…</option>
               </select>
@@ -256,6 +255,10 @@
     function fmtMib(mib) {
       if (mib >= 1024) return (mib / 1024).toFixed(1) + " GiB";
       return mib + " MiB";
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
     function barPct(free, total) {
@@ -321,12 +324,12 @@
       const stats = node.stats;
       const isSelf = entry.addr === "self";
       const reachable = node.reachable;
-      const name = entry.name || "unknown";
-      const addr = entry.addr || "";
+      const name = escapeHtml(entry.name || "unknown");
+      const addr = escapeHtml(entry.addr || "");
 
       const dotClass = reachable ? "ok" : "err";
-      const role = stats ? stats.role : (isSelf ? "self" : "worker");
-      const version = stats ? stats.binary_version || "" : "";
+      const role = escapeHtml(stats ? stats.role : (isSelf ? "self" : "worker"));
+      const version = escapeHtml(stats ? stats.binary_version || "" : "");
       const running = stats ? stats.running : false;
 
       let ramHtml = "";
@@ -350,7 +353,7 @@
             ? `<div class="unreliable-chip">⚠ unreliable</div>` : "";
           vramHtml = `
             <div class="stat-row">
-              <div class="stat-label">VRAM (${gpu.name})</div>
+              <div class="stat-label">VRAM (${escapeHtml(gpu.name)})</div>
               <div class="bar-track"><div class="bar-fill vram" style="width:${vramPct}%"></div></div>
               <div class="stat-text">${fmtMib(vramUsed)} used / ${fmtMib(gpu.vram_total_mib || 0)} total</div>
               ${unreliable}
@@ -359,14 +362,13 @@
           vramHtml = `<div class="no-gpu-text">no GPU</div>`;
         }
       } else if (!reachable) {
-        const errMsg = node.error ? `<div class="node-error">${node.error}</div>` : "";
+        const errMsg = node.error ? `<div class="node-error">${escapeHtml(node.error)}</div>` : "";
         vramHtml = `<div class="no-gpu-text">unreachable</div>${errMsg}`;
       }
 
       const removeBtn = isSelf ? "" :
         `<button class="node-remove" data-addr="${addr}" title="Remove node">✕</button>`;
 
-      const runningChip = running ? `<span style="font-size:0.68rem; color:#238636;">running</span>` : "";
       const metaHtml = version ? `<div class="node-meta">v${version}${running ? " · running" : ""}</div>` : (running ? `<div class="node-meta">running</div>` : "");
 
       const card = document.createElement("div");
@@ -402,7 +404,7 @@
         const warnEl = document.getElementById("cluster-warnings");
         if (cs.warnings && cs.warnings.length > 0) {
           warnEl.style.display = "";
-          warnEl.textContent = "⚠ " + cs.warnings.join(" | ");
+          warnEl.textContent = "⚠ " + cs.warnings.map(escapeHtml).join(" | ");
         } else {
           warnEl.style.display = "none";
         }
@@ -486,8 +488,7 @@
       if (tensorSplit) body.tensor_split = tensorSplit;
       if (mainGpuVal !== "") body.main_gpu = parseInt(mainGpuVal, 10);
       if (deviceVal) body.device = deviceVal;
-      if (cpuMoeSelect === "off") body.cpu_moe = "off";
-      else if (cpuMoeSelect === "all") body.cpu_moe = "all";
+      if (cpuMoeSelect === "all") body.cpu_moe = "all";
       else if (cpuMoeSelect === "custom" && cpuMoeN) body.cpu_moe = cpuMoeN;
 
       try {

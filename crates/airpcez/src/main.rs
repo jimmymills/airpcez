@@ -16,6 +16,7 @@ async fn main() {
         name: config.node_name.clone(),
         role: config.role,
         llama_dir: config.llama_dir.clone(),
+        rpc_port: config.rpc_port,
     });
     let state = AppState {
         provider,

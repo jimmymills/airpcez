@@ -181,7 +181,7 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({
             "openai_url": format!("http://localhost:{}/v1", s.llama_port)
         }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e}))).into_response(),
     }
 }
 
