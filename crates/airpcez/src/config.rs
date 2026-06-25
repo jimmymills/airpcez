@@ -10,6 +10,8 @@ pub struct Config {
     pub role: Role,
     pub llama_dir: Option<String>,
     pub node_name: String,
+    #[serde(default)]
+    pub nodes: Vec<airpcez_core::cluster::NodeEntry>,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             llama_dir: None,
             node_name: sysinfo::System::host_name()
                 .unwrap_or_else(|| "airpcez-node".to_string()),
+            nodes: Vec::new(),
         }
     }
 }
