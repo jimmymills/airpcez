@@ -36,9 +36,23 @@ pub fn parse_metal_vram_mib(system_profiler: &str) -> Option<u64> {
     None
 }
 
+/// Apple Silicon has unified memory and no `system_profiler` VRAM line, so the
+/// Metal working set must be estimated: the `iogpu.wired_limit_mb` sysctl when the
+/// user has raised it, otherwise ~75% of physical RAM (the recommended-max default).
+pub fn apple_silicon_working_set_mib(ram_total_mib: u64, iogpu_wired_limit_mb: u64) -> u64 {
+    if iogpu_wired_limit_mb > 0 { iogpu_wired_limit_mb } else { ram_total_mib * 3 / 4 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn apple_silicon_working_set_defaults_to_three_quarters() {
+        assert_eq!(apple_silicon_working_set_mib(16384, 0), 12288); // 75% of 16 GiB
+        assert_eq!(apple_silicon_working_set_mib(16384, 14000), 14000); // raised wired limit wins
+        assert_eq!(apple_silicon_working_set_mib(65536, 0), 49152); // 75% of 64 GiB
+    }
+
     #[test]
     fn computes_real_free_mib_from_vm_stat() {
         let txt = include_str!("../tests/fixtures/vm_stat.txt");

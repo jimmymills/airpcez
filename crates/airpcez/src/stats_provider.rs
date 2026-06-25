@@ -26,7 +26,7 @@ impl StatsProvider for LocalStats {
         let ram_total_mib = sys.total_memory() / (1024 * 1024);
         let ram_free_mib = real_free_ram_mib(sys.available_memory() / (1024 * 1024));
         let cpu_logical = num_cpus_logical();
-        let devices = gather_devices();
+        let devices = gather_devices(ram_total_mib);
         NodeStats {
             name: self.name.clone(),
             role: self.role,
@@ -47,7 +47,7 @@ fn num_cpus_logical() -> u32 {
 }
 
 #[cfg(target_os = "linux")]
-fn gather_devices() -> Vec<DeviceStats> {
+fn gather_devices(_ram_total_mib: u64) -> Vec<DeviceStats> {
     let out = Command::new("nvidia-smi")
         .args(["--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"])
         .output();
@@ -60,11 +60,23 @@ fn gather_devices() -> Vec<DeviceStats> {
 }
 
 #[cfg(target_os = "macos")]
-fn gather_devices() -> Vec<DeviceStats> {
+fn gather_devices(ram_total_mib: u64) -> Vec<DeviceStats> {
     let sp = Command::new("system_profiler").arg("SPDisplaysDataType").output();
-    let total = sp.ok()
+    let parsed = sp.ok()
         .filter(|o| o.status.success())
         .and_then(|o| crate::stats_macos::parse_metal_vram_mib(&String::from_utf8_lossy(&o.stdout)));
+    // Apple Silicon reports no system_profiler VRAM line (unified memory); fall back to
+    // an estimated Metal working set. Intel/discrete Macs keep the parsed VRAM value.
+    let total = parsed.or_else(|| {
+        if cfg!(target_arch = "aarch64") {
+            let wired = Command::new("sysctl").args(["-n", "iogpu.wired_limit_mb"]).output().ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            Some(crate::stats_macos::apple_silicon_working_set_mib(ram_total_mib, wired))
+        } else {
+            None
+        }
+    });
     // Apple unified memory: approximate VRAM free from real-free RAM (vm_stat path).
     let free = real_free_ram_mib(0);
     match total {
@@ -78,4 +90,4 @@ fn gather_devices() -> Vec<DeviceStats> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn gather_devices() -> Vec<DeviceStats> { vec![] }
+fn gather_devices(_ram_total_mib: u64) -> Vec<DeviceStats> { vec![] }
