@@ -14,3 +14,5 @@ sysinfo = "0.31"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.23"
