@@ -19,6 +19,7 @@ pub struct AppState {
 
 pub async fn run_server(port: u16, state: AppState) {
     let app = Router::new()
+        .route("/", get(serve_index))
         .route("/stats", get(stats_handler))
         .route("/ws", get(ws_handler))
         .route("/worker/start", post(worker_start_handler))
@@ -75,4 +76,8 @@ async fn worker_start_handler(
 async fn worker_stop_handler(State(s): State<AppState>) -> StatusCode {
     s.supervisor.stop();
     StatusCode::OK
+}
+
+async fn serve_index() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../assets/index.html"))
 }

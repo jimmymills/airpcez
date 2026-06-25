@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>⚡ airpcez</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d1117; color: #c9d1d9; display: flex; flex-direction: column; height: 100vh; }
+    header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 1.2rem; font-weight: bold; }
+    .layout { display: flex; flex: 1; overflow: hidden; }
+    .panel { padding: 16px; overflow-y: auto; }
+    .nodes-panel { width: 300px; border-right: 1px solid #30363d; background: #161b22; }
+    .workspace { flex: 1; }
+    h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-bottom: 12px; }
+    .node-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
+    .node-name { font-size: 1rem; margin-bottom: 10px; color: #e6edf3; }
+    .stat-row { margin-bottom: 8px; }
+    .stat-label { font-size: 0.75rem; color: #8b949e; margin-bottom: 3px; }
+    .bar-track { background: #0d1117; border-radius: 3px; height: 10px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #238636; border-radius: 3px; transition: width 0.5s; }
+    .bar-fill.vram { background: #1f6feb; }
+    .stat-text { font-size: 0.72rem; color: #8b949e; margin-top: 2px; }
+    .unreliable { font-size: 0.72rem; color: #d29922; margin-top: 4px; }
+    .no-gpu { font-size: 0.78rem; color: #8b949e; }
+    .ws-status { font-size: 0.72rem; margin-top: 8px; }
+    .ws-status.ok { color: #238636; }
+    .ws-status.err { color: #da3633; }
+    .worker-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 16px; max-width: 460px; }
+    .field-row { display: flex; flex-direction: column; margin-bottom: 10px; }
+    label { font-size: 0.78rem; color: #8b949e; margin-bottom: 4px; }
+    input[type="text"], input[type="number"] {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 6px 8px; border-radius: 4px; font-family: monospace; font-size: 0.85rem;
+    }
+    .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+    button {
+      padding: 6px 16px; border-radius: 4px; border: 1px solid #30363d;
+      cursor: pointer; font-family: monospace; font-size: 0.85rem;
+    }
+    #btn-start { background: #238636; border-color: #2ea043; color: #fff; }
+    #btn-start:hover { background: #2ea043; }
+    #btn-stop { background: #21262d; color: #c9d1d9; }
+    #btn-stop:hover { background: #30363d; }
+    #worker-status { margin-top: 10px; font-size: 0.8rem; }
+    .status-ok { color: #238636; }
+    .status-err { color: #da3633; }
+  </style>
+</head>
+<body>
+  <header>⚡ airpcez</header>
+  <div class="layout">
+    <!-- LEFT: nodes panel -->
+    <div class="panel nodes-panel">
+      <h2>Nodes</h2>
+      <div class="node-card">
+        <div class="node-name" id="node-name">connecting…</div>
+
+        <div class="stat-row">
+          <div class="stat-label">RAM</div>
+          <div class="bar-track"><div class="bar-fill" id="ram-bar" style="width:0%"></div></div>
+          <div class="stat-text" id="ram-text">—</div>
+        </div>
+
+        <div class="stat-row" id="vram-section">
+          <div class="stat-label">VRAM</div>
+          <div class="bar-track"><div class="bar-fill vram" id="vram-bar" style="width:0%"></div></div>
+          <div class="stat-text" id="vram-text">—</div>
+          <div class="unreliable" id="vram-unreliable" style="display:none">⚠ unreliable reading</div>
+        </div>
+        <div class="no-gpu" id="no-gpu" style="display:none">No GPU detected</div>
+
+        <div class="ws-status err" id="ws-status">● disconnected</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: workspace -->
+    <div class="panel workspace">
+      <h2>Worker</h2>
+      <div class="worker-card">
+        <div class="field-row">
+          <label for="bin-input">Binary</label>
+          <input id="bin-input" type="text" value="rpc-server" />
+        </div>
+        <div class="field-row">
+          <label for="port-input">RPC Port</label>
+          <input id="port-input" type="number" value="50052" min="1" max="65535" />
+        </div>
+        <div class="field-row">
+          <label for="device-input">Device (optional)</label>
+          <input id="device-input" type="text" placeholder="e.g. cuda:0" />
+        </div>
+        <div class="btn-row">
+          <button id="btn-start">Start worker</button>
+          <button id="btn-stop">Stop worker</button>
+        </div>
+        <div id="worker-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // WebSocket live stats
+    const wsUrl = "ws://" + location.host + "/ws";
+    let socket;
+
+    function connect() {
+      socket = new WebSocket(wsUrl);
+      socket.onopen = () => {
+        document.getElementById("ws-status").textContent = "● connected";
+        document.getElementById("ws-status").className = "ws-status ok";
+      };
+      socket.onclose = () => {
+        document.getElementById("ws-status").textContent = "● disconnected";
+        document.getElementById("ws-status").className = "ws-status err";
+        setTimeout(connect, 3000);
+      };
+      socket.onerror = () => {
+        document.getElementById("ws-status").textContent = "● error";
+        document.getElementById("ws-status").className = "ws-status err";
+      };
+      socket.onmessage = (evt) => {
+        try {
+          const stats = JSON.parse(evt.data);
+          updateStats(stats);
+        } catch (_) {}
+      };
+    }
+
+    function fmtMib(mib) {
+      if (mib >= 1024) return (mib / 1024).toFixed(1) + " GiB";
+      return mib + " MiB";
+    }
+
+    function updateStats(s) {
+      document.getElementById("node-name").textContent = s.name || "unknown";
+
+      // RAM bar (used = total - free)
+      const ramUsed = s.ram_total_mib - s.ram_free_mib;
+      const ramPct = s.ram_total_mib > 0 ? Math.round((ramUsed / s.ram_total_mib) * 100) : 0;
+      document.getElementById("ram-bar").style.width = ramPct + "%";
+      document.getElementById("ram-text").textContent =
+        fmtMib(ramUsed) + " used / " + fmtMib(s.ram_total_mib) + " total";
+
+      // VRAM
+      const gpu = s.devices && s.devices[0];
+      if (gpu) {
+        document.getElementById("no-gpu").style.display = "none";
+        document.getElementById("vram-section").style.display = "";
+        const vramUsed = gpu.vram_total_mib - gpu.vram_free_mib;
+        const vramPct = gpu.vram_total_mib > 0 ? Math.round((vramUsed / gpu.vram_total_mib) * 100) : 0;
+        document.getElementById("vram-bar").style.width = vramPct + "%";
+        document.getElementById("vram-text").textContent =
+          fmtMib(vramUsed) + " used / " + fmtMib(gpu.vram_total_mib) + " total (" + gpu.name + ")";
+        const unreliableEl = document.getElementById("vram-unreliable");
+        unreliableEl.style.display = gpu.reliable === false ? "" : "none";
+      } else {
+        document.getElementById("vram-section").style.display = "none";
+        document.getElementById("no-gpu").style.display = "";
+      }
+    }
+
+    connect();
+
+    // Worker controls
+    async function workerAction(url, body) {
+      const statusEl = document.getElementById("worker-status");
+      statusEl.textContent = "sending…";
+      statusEl.className = "";
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        statusEl.textContent = resp.ok ? "✓ " + resp.status + " OK" : "✗ " + resp.status;
+        statusEl.className = resp.ok ? "status-ok" : "status-err";
+      } catch (e) {
+        statusEl.textContent = "✗ " + e.message;
+        statusEl.className = "status-err";
+      }
+    }
+
+    document.getElementById("btn-start").addEventListener("click", () => {
+      const binary = document.getElementById("bin-input").value.trim();
+      const rpc_port = parseInt(document.getElementById("port-input").value, 10);
+      const deviceVal = document.getElementById("device-input").value.trim();
+      const body = { binary, rpc_port };
+      if (deviceVal) body.device = deviceVal;
+      workerAction("/worker/start", body);
+    });
+
+    document.getElementById("btn-stop").addEventListener("click", () => {
+      workerAction("/worker/stop", null);
+    });
+  </script>
+</body>
+</html>
