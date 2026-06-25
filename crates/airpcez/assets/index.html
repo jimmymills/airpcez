@@ -97,6 +97,16 @@
     #launch-result a { color: #58a6ff; text-decoration: none; }
     #launch-result a:hover { text-decoration: underline; }
 
+    /* Fit verdict chip */
+    .fit-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 4px; font-size: 0.82rem; font-weight: bold; border: 1px solid; }
+    .fit-chip.fits   { background: #0d2a14; border-color: #238636; color: #3fb950; }
+    .fit-chip.tight  { background: #2d2200; border-color: #d29922; color: #e3b341; }
+    .fit-chip.wontfit { background: #2d0f0f; border-color: #da3633; color: #f85149; }
+    .fit-detail { font-size: 0.78rem; color: #8b949e; }
+    .fit-notes { font-size: 0.75rem; color: #d29922; margin-top: 4px; }
+    .fit-notes li { list-style: none; padding: 1px 0; }
+    #suggest-result { margin-top: 8px; }
+
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
     /* Local node stat panel (self ws stats) — original node-card for self */
@@ -164,6 +174,32 @@
       <div>
         <h2>Run a Model</h2>
         <div class="section-card">
+          <div class="field-row">
+            <label for="model-select">Model catalog</label>
+            <select id="model-select">
+              <option value="">loading…</option>
+            </select>
+            <div class="input-hint">Select a known model or choose "(manual)" to enter hf/path + size by hand</div>
+          </div>
+          <!-- Manual meta inputs — shown only when "(manual)" is selected -->
+          <div id="manual-meta-row" style="display:none;">
+            <div class="grid-2" style="margin-bottom:10px;">
+              <div class="field-row">
+                <label for="meta-size-mib">Model size (MiB) — for Suggest</label>
+                <input id="meta-size-mib" type="number" placeholder="42000" min="1" />
+              </div>
+              <div class="field-row">
+                <label for="meta-n-layers">Layers — for Suggest</label>
+                <input id="meta-n-layers" type="number" placeholder="80" min="1" />
+              </div>
+            </div>
+            <div class="field-row" style="margin-bottom:10px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input id="meta-is-moe" type="checkbox" />
+                <span style="font-size:0.78rem; color:#8b949e;">Is MoE (Mixture-of-Experts) — for Suggest</span>
+              </label>
+            </div>
+          </div>
           <div class="grid-2">
             <div class="field-row">
               <label for="model-hf">Model (HF repo:quant)</label>
@@ -217,8 +253,10 @@
           </div>
           <div class="btn-row">
             <button class="btn-green" id="btn-launch">Launch</button>
+            <button class="btn-default" id="btn-suggest">Suggest settings</button>
             <button class="btn-danger" id="btn-host-stop">Stop</button>
           </div>
+          <div id="suggest-result"></div>
           <div id="launch-result"></div>
         </div>
       </div>
@@ -456,6 +494,139 @@
         }
       } catch (e) {
         statusEl.textContent = "error: " + e.message;
+      }
+    });
+
+    // ─── Catalog + model select ────────────────────────────────────────────────
+    let catalogEntries = []; // [{label, hf, meta}]
+    let selectedMeta = null; // the stashed ModelMeta for the active selection
+
+    async function loadCatalog() {
+      try {
+        const resp = await fetch("/catalog");
+        if (!resp.ok) return;
+        catalogEntries = await resp.json();
+        const sel = document.getElementById("model-select");
+        sel.innerHTML = "";
+        // Blank placeholder
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "— pick a model —";
+        sel.appendChild(placeholder);
+        catalogEntries.forEach((entry, idx) => {
+          const opt = document.createElement("option");
+          opt.value = String(idx);
+          opt.textContent = entry.label;
+          sel.appendChild(opt);
+        });
+        const manual = document.createElement("option");
+        manual.value = "manual";
+        manual.textContent = "(manual)";
+        sel.appendChild(manual);
+      } catch (_) {}
+    }
+
+    document.getElementById("model-select").addEventListener("change", (e) => {
+      const val = e.target.value;
+      const manualRow = document.getElementById("manual-meta-row");
+      if (val === "manual") {
+        manualRow.style.display = "";
+        selectedMeta = null;
+        // Don't overwrite hf — let user type
+      } else if (val === "") {
+        manualRow.style.display = "none";
+        selectedMeta = null;
+      } else {
+        manualRow.style.display = "none";
+        const idx = parseInt(val, 10);
+        const entry = catalogEntries[idx];
+        if (entry) {
+          document.getElementById("model-hf").value = entry.hf;
+          selectedMeta = entry.meta; // { total_mib, n_layers, is_moe }
+        }
+      }
+      // Clear any previous suggest result when selection changes
+      document.getElementById("suggest-result").innerHTML = "";
+    });
+
+    loadCatalog();
+
+    // ─── Suggest settings button ───────────────────────────────────────────────
+    document.getElementById("btn-suggest").addEventListener("click", async () => {
+      const resultEl = document.getElementById("suggest-result");
+      resultEl.innerHTML = "<span class='status-info'>fetching suggestion…</span>";
+
+      // Build meta: prefer catalogEntry meta, fall back to manual inputs
+      let meta;
+      if (selectedMeta) {
+        meta = selectedMeta;
+      } else {
+        const sizeMib = parseInt(document.getElementById("meta-size-mib").value.trim(), 10);
+        const nLayers = parseInt(document.getElementById("meta-n-layers").value.trim(), 10);
+        const isMoe = document.getElementById("meta-is-moe").checked;
+        if (!sizeMib || !nLayers) {
+          resultEl.innerHTML = "<span class='status-err'>Select a catalog model or fill in size + layers for Suggest.</span>";
+          return;
+        }
+        meta = { total_mib: sizeMib, n_layers: nLayers, is_moe: isMoe };
+      }
+
+      const ctxRaw = document.getElementById("launch-ctx").value.trim();
+      const ctx = ctxRaw ? parseInt(ctxRaw, 10) : 4096;
+
+      try {
+        const resp = await fetch("/suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ meta, ctx }),
+        });
+        if (!resp.ok) {
+          const txt = await resp.text();
+          resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + escapeHtml(txt.slice(0, 200)) + "</span>";
+          return;
+        }
+        const plan = await resp.json();
+
+        // Pre-fill form fields from plan
+        if (plan.ngl !== undefined && plan.ngl !== null) {
+          document.getElementById("launch-ngl").value = plan.ngl;
+        }
+        if (plan.tensor_split !== undefined && plan.tensor_split !== null) {
+          document.getElementById("launch-tensor-split").value = plan.tensor_split;
+        }
+        // cpu_moe: "all" → all, "off"/null → off (clear custom)
+        const cpuMoeEl = document.getElementById("launch-cpu-moe");
+        if (plan.cpu_moe === "all") {
+          cpuMoeEl.value = "all";
+          document.getElementById("cpu-moe-custom-row").style.display = "none";
+        } else {
+          cpuMoeEl.value = "";
+          document.getElementById("cpu-moe-custom-row").style.display = "none";
+        }
+
+        // Render fit-verdict chip
+        const fit = plan.fit || {};
+        const fitVal = fit.fit || "wontfit";
+        const fitDetail = escapeHtml(fit.detail || "");
+        let chipClass, chipLabel;
+        if (fitVal === "fits")       { chipClass = "fits";    chipLabel = "✅ fits"; }
+        else if (fitVal === "tight") { chipClass = "tight";   chipLabel = "⚠ tight"; }
+        else                          { chipClass = "wontfit"; chipLabel = "❌ won't fit"; }
+
+        let notesHtml = "";
+        if (plan.exclude_notes && plan.exclude_notes.length > 0) {
+          const items = plan.exclude_notes.map(n => `<li>⚠ ${escapeHtml(n)}</li>`).join("");
+          notesHtml = `<ul class="fit-notes">${items}</ul>`;
+        }
+
+        resultEl.innerHTML =
+          `<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:4px;">` +
+          `<span class="fit-chip ${chipClass}">${chipLabel}</span>` +
+          `<span class="fit-detail">${fitDetail}</span>` +
+          `</div>` +
+          notesHtml;
+      } catch (e) {
+        resultEl.innerHTML = "<span class='status-err'>✗ " + escapeHtml(e.message) + "</span>";
       }
     });
 
