@@ -25,7 +25,11 @@ pub fn parse_metal_vram_mib(system_profiler: &str) -> Option<u64> {
             let rest = rest.trim();
             let (num, unit) = rest.split_once(' ')?;
             let n: f64 = num.trim().parse().ok()?;
-            let mib = match unit.trim() { "GB" => n * 1024.0, _ => n };
+            let mib = match unit.trim() {
+                "MB" => n,
+                "GB" => n * 1024.0,
+                _ => return None,
+            };
             return Some(mib as u64);
         }
     }
@@ -42,5 +46,13 @@ mod tests {
         // * 16384 bytes / 1MiB = 2812.5 MiB -> 2812
         let mib = parse_vm_stat_free_mib(txt, 16384);
         assert_eq!(mib, 2812);
+    }
+
+    #[test]
+    fn parses_metal_vram_units() {
+        assert_eq!(parse_metal_vram_mib("      VRAM (Total): 4 GB"), Some(4096));
+        assert_eq!(parse_metal_vram_mib("      VRAM (Dynamic, Max): 1536 MB"), Some(1536));
+        assert_eq!(parse_metal_vram_mib("      VRAM (Total): 4 TB"), None);
+        assert_eq!(parse_metal_vram_mib("no vram line here"), None);
     }
 }
