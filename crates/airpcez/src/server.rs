@@ -73,9 +73,8 @@ async fn worker_start_handler(
     }
 }
 
-async fn worker_stop_handler(State(s): State<AppState>) -> StatusCode {
-    s.supervisor.stop();
-    StatusCode::OK
+async fn worker_stop_handler(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, axum::Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
 }
 
 async fn serve_index() -> axum::response::Html<&'static str> {

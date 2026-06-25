@@ -5,12 +5,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct LocalStats { pub name: String, pub role: Role }
 
+#[cfg(target_os = "macos")]
+fn real_free_ram_mib(fallback_mib: u64) -> u64 {
+    let pagesize: u64 = std::process::Command::new("sysctl").args(["-n", "hw.pagesize"]).output().ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(16384);
+    match std::process::Command::new("vm_stat").output() {
+        Ok(o) if o.status.success() =>
+            crate::stats_macos::parse_vm_stat_free_mib(&String::from_utf8_lossy(&o.stdout), pagesize),
+        _ => fallback_mib,
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn real_free_ram_mib(fallback_mib: u64) -> u64 { fallback_mib }
+
 impl StatsProvider for LocalStats {
     fn sample(&self) -> NodeStats {
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         let ram_total_mib = sys.total_memory() / (1024 * 1024);
-        let ram_free_mib = sys.available_memory() / (1024 * 1024);
+        let ram_free_mib = real_free_ram_mib(sys.available_memory() / (1024 * 1024));
         let cpu_logical = num_cpus_logical();
         let devices = gather_devices();
         NodeStats {
@@ -51,10 +65,8 @@ fn gather_devices() -> Vec<DeviceStats> {
     let total = sp.ok()
         .filter(|o| o.status.success())
         .and_then(|o| crate::stats_macos::parse_metal_vram_mib(&String::from_utf8_lossy(&o.stdout)));
-    // Apple unified memory: approximate VRAM free from system RAM real-free.
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let free = sys.available_memory() / (1024 * 1024);
+    // Apple unified memory: approximate VRAM free from real-free RAM (vm_stat path).
+    let free = real_free_ram_mib(0);
     match total {
         Some(t) => vec![DeviceStats {
             name: "MTL0".into(), kind: DeviceKind::Metal,

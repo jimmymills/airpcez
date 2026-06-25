@@ -15,7 +15,7 @@ pub enum ProcStatus {
 
 pub trait ProcessBackend: Send + Sync {
     fn start(&self, spec: ProcSpec) -> Result<(), String>;
-    fn stop(&self);
+    fn stop(&self) -> bool;
     fn status(&self) -> ProcStatus;
     fn recent_logs(&self) -> Vec<String>;
 }

@@ -120,14 +120,9 @@ impl ProcessBackend for TokioSupervisor {
         Ok(())
     }
 
-    fn stop(&self) {
-        let kill_tx = {
-            let mut g = self.inner.lock().unwrap();
-            g.kill_tx.take()
-        };
-        if let Some(tx) = kill_tx {
-            let _ = tx.send(());
-        }
+    fn stop(&self) -> bool {
+        let tx = { let mut g = self.inner.lock().unwrap(); g.kill_tx.take() };
+        if let Some(tx) = tx { let _ = tx.send(()); true } else { false }
     }
 
     fn status(&self) -> ProcStatus {
