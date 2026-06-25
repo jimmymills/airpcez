@@ -3,7 +3,7 @@ use airpcez::server::AppState;
 use airpcez::stats_provider::LocalStats;
 use airpcez::supervisor::TokioSupervisor;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() {
@@ -19,6 +19,8 @@ async fn main() {
     let state = AppState {
         provider,
         supervisor: Arc::new(TokioSupervisor::new()),
+        nodes: Arc::new(Mutex::new(config.nodes.clone())),
+        http: reqwest::Client::new(),
     };
     airpcez::server::run_server(config.ui_port, state).await;
 }

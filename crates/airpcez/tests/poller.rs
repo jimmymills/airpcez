@@ -10,10 +10,7 @@ async fn polls_reachable_and_unreachable() {
     let stats = NodeStats { name: "up".into(), role: Role::Worker, ram_total_mib: 8,
         ram_free_mib: 4, cpu_logical: 4, devices: vec![], rpc_endpoint: None,
         binary_version: None, running: false, sampled_at_unix: 0 };
-    let state = airpcez::server::AppState {
-        provider: Arc::new(MockStatsProvider { stats }),
-        supervisor: Arc::new(airpcez::supervisor::TokioSupervisor::new()),
-    };
+    let state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats }));
     tokio::spawn(airpcez::server::run_server(19101, state));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 

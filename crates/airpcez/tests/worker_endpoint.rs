@@ -13,9 +13,10 @@ async fn worker_start_and_stop_endpoints() {
         running: false, sampled_at_unix: 0,
     };
     let supervisor = Arc::new(TokioSupervisor::new());
-    let state = AppState {
-        provider: Arc::new(MockStatsProvider { stats }),
-        supervisor: supervisor.clone(),
+    let state = {
+        let mut s = AppState::for_test(Arc::new(MockStatsProvider { stats }));
+        s.supervisor = supervisor.clone();
+        s
     };
     tokio::spawn(airpcez::server::run_server(18677, state));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;

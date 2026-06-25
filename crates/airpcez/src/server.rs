@@ -1,4 +1,4 @@
-use airpcez_core::{process::ProcessBackend, stats::StatsProvider};
+use airpcez_core::{cluster::NodeEntry, process::ProcessBackend, stats::StatsProvider};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -15,6 +15,19 @@ use std::{sync::Arc, time::Duration};
 pub struct AppState {
     pub provider: Arc<dyn StatsProvider>,
     pub supervisor: Arc<dyn ProcessBackend>,
+    pub nodes: Arc<std::sync::Mutex<Vec<NodeEntry>>>,
+    pub http: reqwest::Client,
+}
+
+impl AppState {
+    pub fn for_test(provider: Arc<dyn StatsProvider>) -> AppState {
+        AppState {
+            provider,
+            supervisor: Arc::new(crate::supervisor::TokioSupervisor::new()),
+            nodes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            http: reqwest::Client::new(),
+        }
+    }
 }
 
 pub async fn run_server(port: u16, state: AppState) {
@@ -22,6 +35,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/", get(serve_index))
         .route("/stats", get(stats_handler))
         .route("/ws", get(ws_handler))
+        .route("/cluster", get(cluster_handler))
         .route("/worker/start", post(worker_start_handler))
         .route("/worker/stop", post(worker_stop_handler))
         .with_state(state);
@@ -48,6 +62,21 @@ async fn ws_loop(mut socket: WebSocket, p: Arc<dyn StatsProvider>) {
             break;
         }
     }
+}
+
+async fn cluster_handler(State(s): State<AppState>) -> Json<airpcez_core::cluster::ClusterStatus> {
+    use airpcez_core::cluster::*;
+    let self_stats = s.provider.sample();
+    let self_version = self_stats.binary_version.clone();
+    let self_snap = NodeSnapshot {
+        entry: NodeEntry { name: self_stats.name.clone(), addr: "self".into() },
+        stats: Some(self_stats), reachable: true, error: None,
+    };
+    let nodes = { s.nodes.lock().unwrap().clone() };
+    let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
+    cluster.warnings = version_warnings(self_version.as_deref(), &cluster.nodes);
+    cluster.nodes.insert(0, self_snap);
+    Json(cluster)
 }
 
 #[derive(serde::Deserialize)]
