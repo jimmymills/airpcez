@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// A VRAM reading is trustworthy only if total is non-zero and free <= total.
+/// Drivers (e.g. some Vulkan setups) can report an overflowed "free" value far
+/// larger than physical memory; treat any such reading as unreliable.
+pub fn vram_reliable(total_mib: u64, free_mib: u64) -> bool {
+    total_mib > 0 && free_mib <= total_mib
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -66,5 +73,17 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: NodeStats = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    #[test]
+    fn flags_overflow_and_over_physical_vram_as_unreliable() {
+        // Real 2080 Super: 8 GB total, sane free.
+        assert!(vram_reliable(8192, 7700));
+        // The Vulkan overflow we hit: ~16 EB "free".
+        assert!(!vram_reliable(8192, 17_592_186_044_362));
+        // Free exceeding total is impossible -> unreliable.
+        assert!(!vram_reliable(8192, 9000));
+        // Zero total (no real device) -> unreliable.
+        assert!(!vram_reliable(0, 0));
     }
 }
