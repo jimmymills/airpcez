@@ -1,6 +1,7 @@
 pub mod cluster;
 pub mod flags;
 pub mod model;
+pub mod planner;
 pub mod process;
 pub mod stats;
 
