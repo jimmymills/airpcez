@@ -1,3 +1,5 @@
+use airpcez::server::AppState;
+use airpcez::supervisor::TokioSupervisor;
 use airpcez_core::model::*;
 use airpcez_core::stats::MockStatsProvider;
 use std::sync::Arc;
@@ -9,8 +11,11 @@ async fn stats_endpoint_returns_node_stats() {
         cpu_logical: 4, devices: vec![], rpc_endpoint: None, binary_version: None,
         running: false, sampled_at_unix: 0,
     };
-    let provider = Arc::new(MockStatsProvider { stats: stats.clone() });
-    tokio::spawn(airpcez::server::run_server(18675, provider));
+    let state = AppState {
+        provider: Arc::new(MockStatsProvider { stats: stats.clone() }),
+        supervisor: Arc::new(TokioSupervisor::new()),
+    };
+    tokio::spawn(airpcez::server::run_server(18675, state));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let got: NodeStats = reqwest::get("http://127.0.0.1:18675/stats")
         .await.unwrap().json().await.unwrap();

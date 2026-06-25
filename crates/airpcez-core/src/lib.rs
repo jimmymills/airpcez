@@ -1,3 +1,4 @@
+pub mod flags;
 pub mod model;
 pub mod process;
 pub mod stats;
