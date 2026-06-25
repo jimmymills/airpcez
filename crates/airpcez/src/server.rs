@@ -6,7 +6,7 @@ use axum::{
     },
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use std::{sync::Arc, time::Duration};
@@ -38,6 +38,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/cluster", get(cluster_handler))
         .route("/worker/start", post(worker_start_handler))
         .route("/worker/stop", post(worker_stop_handler))
+        .route("/nodes", post(add_node).delete(remove_node))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -104,6 +105,27 @@ async fn worker_start_handler(
 
 async fn worker_stop_handler(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, axum::Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
+}
+
+async fn add_node(State(s): State<AppState>, Json(entry): Json<NodeEntry>)
+    -> Json<Vec<NodeEntry>> {
+    let mut g = s.nodes.lock().unwrap();
+    if !g.iter().any(|n| n.addr == entry.addr) {
+        g.push(entry);
+    }
+    Json(g.clone())
+}
+
+#[derive(serde::Deserialize)]
+struct RemoveNode {
+    addr: String,
+}
+
+async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
+    -> Json<Vec<NodeEntry>> {
+    let mut g = s.nodes.lock().unwrap();
+    g.retain(|n| n.addr != req.addr);
+    Json(g.clone())
 }
 
 async fn serve_index() -> axum::response::Html<&'static str> {
