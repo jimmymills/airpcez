@@ -1,4 +1,5 @@
 pub mod config;
+pub mod poller;
 pub mod server;
 pub mod stats_nvidia;
 pub mod stats_provider;
