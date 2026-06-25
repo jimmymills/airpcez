@@ -10,51 +10,134 @@
     header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 1.2rem; font-weight: bold; }
     .layout { display: flex; flex: 1; overflow: hidden; }
     .panel { padding: 16px; overflow-y: auto; }
-    .nodes-panel { width: 300px; border-right: 1px solid #30363d; background: #161b22; }
-    .workspace { flex: 1; }
+
+    /* Left: cluster panel */
+    .cluster-panel { width: 340px; border-right: 1px solid #30363d; background: #161b22; display: flex; flex-direction: column; gap: 12px; }
+
+    /* Right: workspace */
+    .workspace { flex: 1; display: flex; flex-direction: column; gap: 20px; }
+
     h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-bottom: 12px; }
-    .node-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
-    .node-name { font-size: 1rem; margin-bottom: 10px; color: #e6edf3; }
-    .stat-row { margin-bottom: 8px; }
-    .stat-label { font-size: 0.75rem; color: #8b949e; margin-bottom: 3px; }
-    .bar-track { background: #0d1117; border-radius: 3px; height: 10px; overflow: hidden; }
+    h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8b949e; margin-bottom: 8px; }
+
+    /* Warning banner */
+    .warn-banner { background: #2d2200; border: 1px solid #d29922; border-radius: 6px; padding: 8px 10px; font-size: 0.75rem; color: #d29922; }
+
+    /* Node rows */
+    .node-list { display: flex; flex-direction: column; gap: 8px; }
+    .node-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; }
+    .node-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .reachable-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .reachable-dot.ok { background: #238636; }
+    .reachable-dot.err { background: #da3633; }
+    .node-name { font-size: 0.9rem; color: #e6edf3; flex: 1; }
+    .node-role { font-size: 0.7rem; color: #8b949e; background: #0d1117; border: 1px solid #30363d; border-radius: 3px; padding: 1px 5px; }
+    .node-remove { background: none; border: none; color: #6e7681; cursor: pointer; font-size: 0.85rem; padding: 0 2px; }
+    .node-remove:hover { color: #da3633; }
+
+    .stat-row { margin-bottom: 6px; }
+    .stat-label { font-size: 0.72rem; color: #8b949e; margin-bottom: 2px; }
+    .bar-track { background: #0d1117; border-radius: 3px; height: 8px; overflow: hidden; }
     .bar-fill { height: 100%; background: #238636; border-radius: 3px; transition: width 0.5s; }
     .bar-fill.vram { background: #1f6feb; }
-    .stat-text { font-size: 0.72rem; color: #8b949e; margin-top: 2px; }
-    .unreliable { font-size: 0.72rem; color: #d29922; margin-top: 4px; }
-    .no-gpu { font-size: 0.78rem; color: #8b949e; }
-    .ws-status { font-size: 0.72rem; margin-top: 8px; }
-    .ws-status.ok { color: #238636; }
-    .ws-status.err { color: #da3633; }
-    .worker-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 16px; max-width: 460px; }
+    .stat-text { font-size: 0.7rem; color: #8b949e; margin-top: 2px; }
+    .unreliable-chip { font-size: 0.7rem; color: #d29922; }
+    .no-gpu-text { font-size: 0.72rem; color: #6e7681; }
+    .node-meta { font-size: 0.68rem; color: #6e7681; margin-top: 4px; }
+    .node-error { font-size: 0.72rem; color: #da3633; margin-top: 4px; }
+
+    /* Add node form */
+    .add-node-form { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px; }
+    .add-node-form h3 { margin-bottom: 8px; }
+    .form-row { display: flex; flex-direction: column; margin-bottom: 6px; }
+    .form-row label { font-size: 0.72rem; color: #8b949e; margin-bottom: 2px; }
+
+    /* Right workspace cards */
+    .section-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 16px; }
     .field-row { display: flex; flex-direction: column; margin-bottom: 10px; }
-    label { font-size: 0.78rem; color: #8b949e; margin-bottom: 4px; }
-    input[type="text"], input[type="number"] {
+    .field-row label { font-size: 0.78rem; color: #8b949e; margin-bottom: 4px; }
+
+    input[type="text"], input[type="number"], select {
       background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
       padding: 6px 8px; border-radius: 4px; font-family: monospace; font-size: 0.85rem;
     }
-    .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+    select { cursor: pointer; }
+    .input-hint { font-size: 0.68rem; color: #6e7681; margin-top: 2px; }
+
+    .btn-row { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
     button {
       padding: 6px 16px; border-radius: 4px; border: 1px solid #30363d;
       cursor: pointer; font-family: monospace; font-size: 0.85rem;
     }
+    .btn-green { background: #238636; border-color: #2ea043; color: #fff; }
+    .btn-green:hover { background: #2ea043; }
+    .btn-default { background: #21262d; color: #c9d1d9; }
+    .btn-default:hover { background: #30363d; }
+    .btn-small { padding: 4px 10px; font-size: 0.78rem; }
+    .btn-danger { background: #21262d; border-color: #da3633; color: #da3633; }
+    .btn-danger:hover { background: #3d1111; }
+
+    /* For backwards-compat IDs used in old JS */
     #btn-start { background: #238636; border-color: #2ea043; color: #fff; }
     #btn-start:hover { background: #2ea043; }
     #btn-stop { background: #21262d; color: #c9d1d9; }
     #btn-stop:hover { background: #30363d; }
     #worker-status { margin-top: 10px; font-size: 0.8rem; }
+
     .status-ok { color: #238636; }
     .status-err { color: #da3633; }
+    .status-info { color: #8b949e; }
+
+    .ws-status { font-size: 0.72rem; margin-top: 6px; }
+    .ws-status.ok { color: #238636; }
+    .ws-status.err { color: #da3633; }
+
+    /* Launch result */
+    #launch-result { margin-top: 10px; font-size: 0.8rem; }
+    #launch-result a { color: #58a6ff; text-decoration: none; }
+    #launch-result a:hover { text-decoration: underline; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    /* Local node stat panel (self ws stats) — original node-card for self */
+    .self-stats-card { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
   </style>
 </head>
 <body>
   <header>⚡ airpcez</header>
   <div class="layout">
-    <!-- LEFT: nodes panel -->
-    <div class="panel nodes-panel">
-      <h2>Nodes</h2>
-      <div class="node-card">
-        <div class="node-name" id="node-name">connecting…</div>
+
+    <!-- LEFT: Cluster panel -->
+    <div class="panel cluster-panel">
+      <h2>Cluster</h2>
+
+      <!-- Warning banner (hidden until /cluster returns warnings) -->
+      <div class="warn-banner" id="cluster-warnings" style="display:none"></div>
+
+      <!-- Live node list (rendered by JS) -->
+      <div class="node-list" id="cluster-node-list"></div>
+
+      <!-- Add node form -->
+      <div class="add-node-form">
+        <h3>Add node</h3>
+        <div class="form-row">
+          <label for="add-node-name">Name</label>
+          <input id="add-node-name" type="text" placeholder="worker-1" />
+        </div>
+        <div class="form-row">
+          <label for="add-node-addr">Address</label>
+          <input id="add-node-addr" type="text" placeholder="host:8675" />
+        </div>
+        <div class="btn-row" style="margin-top:6px;">
+          <button class="btn-green btn-small" id="btn-add-node">Add</button>
+          <span id="add-node-status" style="font-size:0.75rem; color:#8b949e; align-self:center;"></span>
+        </div>
+      </div>
+
+      <!-- Self live stats (WebSocket) -->
+      <div class="self-stats-card">
+        <div style="font-size:0.72rem; color:#8b949e; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.06em;">Local live stats (ws)</div>
+        <div id="node-name" style="font-size:0.85rem; color:#e6edf3; margin-bottom:8px;">connecting…</div>
 
         <div class="stat-row">
           <div class="stat-label">RAM</div>
@@ -66,9 +149,9 @@
           <div class="stat-label">VRAM</div>
           <div class="bar-track"><div class="bar-fill vram" id="vram-bar" style="width:0%"></div></div>
           <div class="stat-text" id="vram-text">—</div>
-          <div class="unreliable" id="vram-unreliable" style="display:none">⚠ unreliable reading</div>
+          <div class="unreliable-chip" id="vram-unreliable" style="display:none">⚠ unreliable reading</div>
         </div>
-        <div class="no-gpu" id="no-gpu" style="display:none">No GPU detected</div>
+        <div class="no-gpu-text" id="no-gpu" style="display:none">No GPU detected</div>
 
         <div class="ws-status err" id="ws-status">● disconnected</div>
       </div>
@@ -76,31 +159,112 @@
 
     <!-- RIGHT: workspace -->
     <div class="panel workspace">
-      <h2>Worker</h2>
-      <div class="worker-card">
-        <div class="field-row">
-          <label for="bin-input">Binary</label>
-          <input id="bin-input" type="text" value="rpc-server" />
+
+      <!-- Run a Model section -->
+      <div>
+        <h2>Run a Model</h2>
+        <div class="section-card">
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="model-hf">Model (HF repo:quant)</label>
+              <input id="model-hf" type="text" placeholder="org/model:Q4_K_M" />
+              <div class="input-hint">Used as -hf flag if set</div>
+            </div>
+            <div class="field-row">
+              <label for="model-path">Local model path</label>
+              <input id="model-path" type="text" placeholder="/models/gguf/model.gguf" />
+              <div class="input-hint">Used as -m flag if set (hf takes precedence)</div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="launch-ngl">GPU layers (-ngl)</label>
+              <input id="launch-ngl" type="number" placeholder="99" min="0" />
+            </div>
+            <div class="field-row">
+              <label for="launch-ctx">Context size (-c)</label>
+              <input id="launch-ctx" type="number" placeholder="4096" min="512" />
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="launch-tensor-split">Tensor split (--tensor-split)</label>
+              <input id="launch-tensor-split" type="text" placeholder="3,1" />
+              <div class="input-hint">Comma-separated ratios</div>
+            </div>
+            <div class="field-row">
+              <label for="launch-main-gpu">Main GPU (--main-gpu)</label>
+              <input id="launch-main-gpu" type="number" placeholder="0" min="0" />
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="launch-device">Device (--device)</label>
+              <input id="launch-device" type="text" placeholder="cuda:0" />
+            </div>
+            <div class="field-row">
+              <label for="launch-cpu-moe">CPU MoE (--cpu-moe)</label>
+              <select id="launch-cpu-moe">
+                <option value="">off (default)</option>
+                <option value="off">off</option>
+                <option value="all">all</option>
+                <option value="custom">custom number…</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row" id="cpu-moe-custom-row" style="display:none;">
+            <label for="launch-cpu-moe-n">CPU MoE n-experts</label>
+            <input id="launch-cpu-moe-n" type="number" placeholder="2" min="1" />
+          </div>
+          <div class="btn-row">
+            <button class="btn-green" id="btn-launch">Launch</button>
+            <button class="btn-danger" id="btn-host-stop">Stop</button>
+          </div>
+          <div id="launch-result"></div>
         </div>
-        <div class="field-row">
-          <label for="port-input">RPC Port</label>
-          <input id="port-input" type="number" value="50052" min="1" max="65535" />
-        </div>
-        <div class="field-row">
-          <label for="device-input">Device (optional)</label>
-          <input id="device-input" type="text" placeholder="e.g. cuda:0" />
-        </div>
-        <div class="btn-row">
-          <button id="btn-start">Start worker</button>
-          <button id="btn-stop">Stop worker</button>
-        </div>
-        <div id="worker-status"></div>
       </div>
+
+      <!-- Worker section (preserved from Phase 1) -->
+      <div>
+        <h2>Worker</h2>
+        <div class="section-card" style="max-width:460px;">
+          <div class="field-row">
+            <label for="bin-input">Binary</label>
+            <input id="bin-input" type="text" value="rpc-server" />
+          </div>
+          <div class="field-row">
+            <label for="port-input">RPC Port</label>
+            <input id="port-input" type="number" value="50052" min="1" max="65535" />
+          </div>
+          <div class="field-row">
+            <label for="device-input">Device (optional)</label>
+            <input id="device-input" type="text" placeholder="e.g. cuda:0" />
+          </div>
+          <div class="btn-row">
+            <button id="btn-start">Start worker</button>
+            <button id="btn-stop">Stop worker</button>
+          </div>
+          <div id="worker-status"></div>
+        </div>
+      </div>
+
     </div>
   </div>
 
   <script>
-    // WebSocket live stats
+    // ─── Utilities ─────────────────────────────────────────────────────────────
+    function fmtMib(mib) {
+      if (mib >= 1024) return (mib / 1024).toFixed(1) + " GiB";
+      return mib + " MiB";
+    }
+
+    function barPct(free, total) {
+      if (!total || total <= 0) return 0;
+      const used = total - free;
+      return Math.round((used / total) * 100);
+    }
+
+    // ─── WebSocket (local live stats) ──────────────────────────────────────────
     const wsUrl = "ws://" + location.host + "/ws";
     let socket;
 
@@ -120,40 +284,29 @@
         document.getElementById("ws-status").className = "ws-status err";
       };
       socket.onmessage = (evt) => {
-        try {
-          const stats = JSON.parse(evt.data);
-          updateStats(stats);
-        } catch (_) {}
+        try { updateLocalStats(JSON.parse(evt.data)); } catch (_) {}
       };
     }
 
-    function fmtMib(mib) {
-      if (mib >= 1024) return (mib / 1024).toFixed(1) + " GiB";
-      return mib + " MiB";
-    }
-
-    function updateStats(s) {
+    function updateLocalStats(s) {
       document.getElementById("node-name").textContent = s.name || "unknown";
 
-      // RAM bar (used = total - free)
-      const ramUsed = s.ram_total_mib - s.ram_free_mib;
-      const ramPct = s.ram_total_mib > 0 ? Math.round((ramUsed / s.ram_total_mib) * 100) : 0;
+      const ramPct = barPct(s.ram_free_mib, s.ram_total_mib);
       document.getElementById("ram-bar").style.width = ramPct + "%";
+      const ramUsed = (s.ram_total_mib || 0) - (s.ram_free_mib || 0);
       document.getElementById("ram-text").textContent =
-        fmtMib(ramUsed) + " used / " + fmtMib(s.ram_total_mib) + " total";
+        fmtMib(ramUsed) + " used / " + fmtMib(s.ram_total_mib || 0) + " total";
 
-      // VRAM
       const gpu = s.devices && s.devices[0];
       if (gpu) {
         document.getElementById("no-gpu").style.display = "none";
         document.getElementById("vram-section").style.display = "";
-        const vramUsed = gpu.vram_total_mib - gpu.vram_free_mib;
-        const vramPct = gpu.vram_total_mib > 0 ? Math.round((vramUsed / gpu.vram_total_mib) * 100) : 0;
+        const vramPct = barPct(gpu.vram_free_mib, gpu.vram_total_mib);
         document.getElementById("vram-bar").style.width = vramPct + "%";
+        const vramUsed = (gpu.vram_total_mib || 0) - (gpu.vram_free_mib || 0);
         document.getElementById("vram-text").textContent =
-          fmtMib(vramUsed) + " used / " + fmtMib(gpu.vram_total_mib) + " total (" + gpu.name + ")";
-        const unreliableEl = document.getElementById("vram-unreliable");
-        unreliableEl.style.display = gpu.reliable === false ? "" : "none";
+          fmtMib(vramUsed) + " used / " + fmtMib(gpu.vram_total_mib || 0) + " total (" + gpu.name + ")";
+        document.getElementById("vram-unreliable").style.display = gpu.reliable === false ? "" : "none";
       } else {
         document.getElementById("vram-section").style.display = "none";
         document.getElementById("no-gpu").style.display = "";
@@ -162,7 +315,224 @@
 
     connect();
 
-    // Worker controls
+    // ─── Cluster polling (/cluster every 2s) ───────────────────────────────────
+    function renderNodeCard(node) {
+      const entry = node.entry || {};
+      const stats = node.stats;
+      const isSelf = entry.addr === "self";
+      const reachable = node.reachable;
+      const name = entry.name || "unknown";
+      const addr = entry.addr || "";
+
+      const dotClass = reachable ? "ok" : "err";
+      const role = stats ? stats.role : (isSelf ? "self" : "worker");
+      const version = stats ? stats.binary_version || "" : "";
+      const running = stats ? stats.running : false;
+
+      let ramHtml = "";
+      let vramHtml = "";
+
+      if (stats) {
+        const ramPct = barPct(stats.ram_free_mib, stats.ram_total_mib);
+        const ramUsed = (stats.ram_total_mib || 0) - (stats.ram_free_mib || 0);
+        ramHtml = `
+          <div class="stat-row">
+            <div class="stat-label">RAM</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${ramPct}%"></div></div>
+            <div class="stat-text">${fmtMib(ramUsed)} used / ${fmtMib(stats.ram_total_mib || 0)} total</div>
+          </div>`;
+
+        const gpu = stats.devices && stats.devices[0];
+        if (gpu) {
+          const vramPct = barPct(gpu.vram_free_mib, gpu.vram_total_mib);
+          const vramUsed = (gpu.vram_total_mib || 0) - (gpu.vram_free_mib || 0);
+          const unreliable = gpu.reliable === false
+            ? `<div class="unreliable-chip">⚠ unreliable</div>` : "";
+          vramHtml = `
+            <div class="stat-row">
+              <div class="stat-label">VRAM (${gpu.name})</div>
+              <div class="bar-track"><div class="bar-fill vram" style="width:${vramPct}%"></div></div>
+              <div class="stat-text">${fmtMib(vramUsed)} used / ${fmtMib(gpu.vram_total_mib || 0)} total</div>
+              ${unreliable}
+            </div>`;
+        } else {
+          vramHtml = `<div class="no-gpu-text">no GPU</div>`;
+        }
+      } else if (!reachable) {
+        const errMsg = node.error ? `<div class="node-error">${node.error}</div>` : "";
+        vramHtml = `<div class="no-gpu-text">unreachable</div>${errMsg}`;
+      }
+
+      const removeBtn = isSelf ? "" :
+        `<button class="node-remove" data-addr="${addr}" title="Remove node">✕</button>`;
+
+      const runningChip = running ? `<span style="font-size:0.68rem; color:#238636;">running</span>` : "";
+      const metaHtml = version ? `<div class="node-meta">v${version}${running ? " · running" : ""}</div>` : (running ? `<div class="node-meta">running</div>` : "");
+
+      const card = document.createElement("div");
+      card.className = "node-card";
+      card.innerHTML = `
+        <div class="node-header">
+          <div class="reachable-dot ${dotClass}"></div>
+          <div class="node-name">${name}</div>
+          <div class="node-role">${role || "worker"}</div>
+          ${removeBtn}
+        </div>
+        ${ramHtml}
+        ${vramHtml}
+        ${metaHtml}
+      `;
+
+      // Wire up remove button
+      const rb = card.querySelector(".node-remove");
+      if (rb) {
+        rb.addEventListener("click", () => removeNode(rb.dataset.addr));
+      }
+
+      return card;
+    }
+
+    async function pollCluster() {
+      try {
+        const resp = await fetch("/cluster");
+        if (!resp.ok) return;
+        const cs = await resp.json();
+
+        // Warnings banner
+        const warnEl = document.getElementById("cluster-warnings");
+        if (cs.warnings && cs.warnings.length > 0) {
+          warnEl.style.display = "";
+          warnEl.textContent = "⚠ " + cs.warnings.join(" | ");
+        } else {
+          warnEl.style.display = "none";
+        }
+
+        // Node list
+        const listEl = document.getElementById("cluster-node-list");
+        listEl.innerHTML = "";
+        for (const node of (cs.nodes || [])) {
+          listEl.appendChild(renderNodeCard(node));
+        }
+      } catch (_) {}
+    }
+
+    pollCluster();
+    setInterval(pollCluster, 2000);
+
+    // ─── Add / Remove nodes ────────────────────────────────────────────────────
+    async function removeNode(addr) {
+      try {
+        const resp = await fetch("/nodes", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ addr }),
+        });
+        if (resp.ok) pollCluster();
+      } catch (_) {}
+    }
+
+    document.getElementById("btn-add-node").addEventListener("click", async () => {
+      const name = document.getElementById("add-node-name").value.trim();
+      const addr = document.getElementById("add-node-addr").value.trim();
+      const statusEl = document.getElementById("add-node-status");
+      if (!addr) { statusEl.textContent = "addr required"; return; }
+      statusEl.textContent = "adding…";
+      try {
+        const resp = await fetch("/nodes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name || addr, addr }),
+        });
+        if (resp.ok) {
+          statusEl.textContent = "added";
+          document.getElementById("add-node-name").value = "";
+          document.getElementById("add-node-addr").value = "";
+          pollCluster();
+        } else {
+          const txt = await resp.text();
+          statusEl.textContent = "error: " + resp.status + " " + txt.slice(0, 60);
+        }
+      } catch (e) {
+        statusEl.textContent = "error: " + e.message;
+      }
+    });
+
+    // ─── CPU MoE selector ──────────────────────────────────────────────────────
+    document.getElementById("launch-cpu-moe").addEventListener("change", (e) => {
+      const customRow = document.getElementById("cpu-moe-custom-row");
+      customRow.style.display = e.target.value === "custom" ? "" : "none";
+    });
+
+    // ─── Launch / Stop host ────────────────────────────────────────────────────
+    document.getElementById("btn-launch").addEventListener("click", async () => {
+      const resultEl = document.getElementById("launch-result");
+      resultEl.innerHTML = "<span class='status-info'>launching…</span>";
+
+      const modelHf = document.getElementById("model-hf").value.trim();
+      const modelPath = document.getElementById("model-path").value.trim();
+      const nglVal = document.getElementById("launch-ngl").value.trim();
+      const ctxVal = document.getElementById("launch-ctx").value.trim();
+      const tensorSplit = document.getElementById("launch-tensor-split").value.trim();
+      const mainGpuVal = document.getElementById("launch-main-gpu").value.trim();
+      const deviceVal = document.getElementById("launch-device").value.trim();
+      const cpuMoeSelect = document.getElementById("launch-cpu-moe").value;
+      const cpuMoeN = document.getElementById("launch-cpu-moe-n").value.trim();
+
+      const body = {};
+      if (modelHf) body.model_hf = modelHf;
+      else if (modelPath) body.model_path = modelPath;
+      if (nglVal !== "") body.ngl = parseInt(nglVal, 10);
+      if (ctxVal !== "") body.ctx = parseInt(ctxVal, 10);
+      if (tensorSplit) body.tensor_split = tensorSplit;
+      if (mainGpuVal !== "") body.main_gpu = parseInt(mainGpuVal, 10);
+      if (deviceVal) body.device = deviceVal;
+      if (cpuMoeSelect === "off") body.cpu_moe = "off";
+      else if (cpuMoeSelect === "all") body.cpu_moe = "all";
+      else if (cpuMoeSelect === "custom" && cpuMoeN) body.cpu_moe = cpuMoeN;
+
+      try {
+        const resp = await fetch("/host/launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const openaiUrl = data.openai_url || "";
+          // Derive the chat base by stripping /v1
+          const chatBase = openaiUrl.endsWith("/v1")
+            ? openaiUrl.slice(0, -3)
+            : openaiUrl.replace(/\/v1$/, "");
+          resultEl.innerHTML =
+            "<span class='status-ok'>✓ launched</span> — " +
+            "OpenAI URL: <a href='" + openaiUrl + "' target='_blank'>" + openaiUrl + "</a>" +
+            (chatBase ? " | <a href='" + chatBase + "' target='_blank'>chat UI</a>" : "");
+        } else {
+          const txt = await resp.text();
+          resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + txt.slice(0, 200) + "</span>";
+        }
+      } catch (e) {
+        resultEl.innerHTML = "<span class='status-err'>✗ " + e.message + "</span>";
+      }
+    });
+
+    document.getElementById("btn-host-stop").addEventListener("click", async () => {
+      const resultEl = document.getElementById("launch-result");
+      resultEl.innerHTML = "<span class='status-info'>stopping…</span>";
+      try {
+        const resp = await fetch("/host/stop", { method: "POST" });
+        if (resp.ok) {
+          resultEl.innerHTML = "<span class='status-ok'>✓ stopped</span>";
+        } else {
+          const txt = await resp.text();
+          resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + txt.slice(0, 200) + "</span>";
+        }
+      } catch (e) {
+        resultEl.innerHTML = "<span class='status-err'>✗ " + e.message + "</span>";
+      }
+    });
+
+    // ─── Worker controls (Phase 1, preserved) ──────────────────────────────────
     async function workerAction(url, body) {
       const statusEl = document.getElementById("worker-status");
       statusEl.textContent = "sending…";
