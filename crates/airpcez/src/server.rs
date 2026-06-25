@@ -17,6 +17,8 @@ pub struct AppState {
     pub supervisor: Arc<dyn ProcessBackend>,
     pub nodes: Arc<std::sync::Mutex<Vec<NodeEntry>>>,
     pub http: reqwest::Client,
+    pub llama_dir: Option<String>,
+    pub llama_port: u16,
 }
 
 impl AppState {
@@ -26,6 +28,8 @@ impl AppState {
             supervisor: Arc::new(crate::supervisor::TokioSupervisor::new()),
             nodes: Arc::new(std::sync::Mutex::new(Vec::new())),
             http: reqwest::Client::new(),
+            llama_dir: None,
+            llama_port: 8080,
         }
     }
 }
@@ -39,6 +43,8 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/worker/start", post(worker_start_handler))
         .route("/worker/stop", post(worker_stop_handler))
         .route("/nodes", post(add_node).delete(remove_node))
+        .route("/host/launch", post(host_launch))
+        .route("/host/stop", post(host_stop))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -130,4 +136,55 @@ async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
 
 async fn serve_index() -> axum::response::Html<&'static str> {
     axum::response::Html(include_str!("../assets/index.html"))
+}
+
+#[derive(serde::Deserialize)]
+struct LaunchRequest {
+    model_hf: Option<String>,
+    model_path: Option<String>,
+    ngl: Option<u32>,
+    tensor_split: Option<String>,
+    main_gpu: Option<u32>,
+    device: Option<String>,
+    cpu_moe: Option<String>,
+    ctx: Option<u32>,
+}
+
+async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
+    use airpcez_core::flags::*;
+    let model = match (req.model_hf, req.model_path) {
+        (Some(hf), _) => ModelRef::Hf(hf),
+        (None, Some(p)) => ModelRef::Local(p),
+        (None, None) => return (StatusCode::BAD_REQUEST, "model_hf or model_path required".to_string()).into_response(),
+    };
+    let cpu_moe = match req.cpu_moe.as_deref() {
+        Some("all") => CpuMoe::All,
+        Some("off") | None => CpuMoe::Off,
+        Some(n) => match n.parse::<u32>() { Ok(v) => CpuMoe::NLayers(v), Err(_) => CpuMoe::Off },
+    };
+    let nodes = { s.nodes.lock().unwrap().clone() };
+    let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
+    let eps: Vec<String> = cluster.nodes.iter()
+        .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
+        .collect();
+    let binary = match &s.llama_dir {
+        Some(d) => format!("{d}/llama-server"),
+        None => "llama-server".to_string(),
+    };
+    let opts = LlamaServerOpts {
+        binary: &binary, model: &model, rpc_endpoints: &eps,
+        ngl: req.ngl, tensor_split: req.tensor_split.as_deref(), main_gpu: req.main_gpu,
+        device: req.device.as_deref(), cpu_moe: &cpu_moe, ctx: req.ctx,
+        host: "0.0.0.0", port: s.llama_port,
+    };
+    match s.supervisor.start(llama_server_spec(&opts)) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({
+            "openai_url": format!("http://localhost:{}/v1", s.llama_port)
+        }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn host_stop(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
 }

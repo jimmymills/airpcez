@@ -22,6 +22,8 @@ async fn main() {
         supervisor: Arc::new(TokioSupervisor::new()),
         nodes: Arc::new(Mutex::new(config.nodes.clone())),
         http: reqwest::Client::new(),
+        llama_dir: config.llama_dir.clone(),
+        llama_port: config.llama_port,
     };
     airpcez::server::run_server(config.ui_port, state).await;
 }
