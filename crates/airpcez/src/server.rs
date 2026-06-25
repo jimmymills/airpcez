@@ -45,6 +45,8 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/nodes", post(add_node).delete(remove_node))
         .route("/host/launch", post(host_launch))
         .route("/host/stop", post(host_stop))
+        .route("/catalog", get(catalog_handler))
+        .route("/suggest", post(suggest_handler))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -187,4 +189,25 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
 
 async fn host_stop(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
+}
+
+async fn catalog_handler() -> Json<Vec<crate::catalog::CatalogEntry>> {
+    Json(crate::catalog::model_catalog())
+}
+
+#[derive(serde::Deserialize)]
+struct SuggestRequest { meta: airpcez_core::planner::ModelMeta, ctx: u32 }
+
+async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestRequest>)
+    -> Json<airpcez_core::planner::Plan> {
+    use airpcez_core::cluster::*;
+    let self_stats = s.provider.sample();
+    let self_snap = NodeSnapshot {
+        entry: NodeEntry { name: self_stats.name.clone(), addr: "self".into() },
+        stats: Some(self_stats), reachable: true, error: None,
+    };
+    let nodes = { s.nodes.lock().unwrap().clone() };
+    let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
+    cluster.nodes.insert(0, self_snap);
+    Json(airpcez_core::planner::suggest_plan(&cluster, &req.meta, req.ctx))
 }
