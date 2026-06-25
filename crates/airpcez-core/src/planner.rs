@@ -31,10 +31,15 @@ pub struct Plan {
     pub fit: FitVerdict,
     pub gpu_pool_mib: u64,
     pub cpu_pool_mib: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// Rough KV-cache size: ~0.125 MiB per layer per 1024 context tokens.
-/// A heuristic for the fit check, not an exact figure.
+/// A heuristic for the fit check, not an exact figure. Note: the estimate
+/// trends LOW at high context (e.g. 32k+) because it ignores GQA ratios and
+/// quantized-KV savings; the Fits 10% headroom margin partially absorbs this,
+/// so the formula is deliberately rough rather than over-precise.
 pub fn kv_mib(n_layers: u32, ctx: u32) -> u64 {
     (n_layers as u64 * ctx as u64) / 8192
 }
@@ -58,6 +63,7 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
     let mut splits: Vec<u64> = Vec::new();
     let mut exclude_notes = Vec::new();
     let mut cpu_pool = 0u64;
+    let mut roomiest: Option<(String, u64)> = None;
     for n in &cluster.nodes {
         let Some(st) = &n.stats else { continue };
         if !n.reachable { continue; }
@@ -69,6 +75,9 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
                 splits.push(usable);
                 if matches!(d.kind, crate::model::DeviceKind::Metal) {
                     unified_vram += d.vram_free_mib;
+                }
+                if roomiest.as_ref().map_or(true, |(_, best)| usable > *best) {
+                    roomiest = Some((format!("{}/{}", n.entry.name, d.name), usable));
                 }
             } else if !d.reliable {
                 exclude_notes.push(format!(
@@ -86,20 +95,26 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
         Some(if gpu_pool >= meta.total_mib { "off".to_string() } else { "all".to_string() })
     } else { None };
 
+    let roomiest_suffix = match &roomiest {
+        Some((name, mib)) => format!(" — roomiest GPU {name} {mib} MiB"),
+        None => " — no reliable GPU detected".to_string(),
+    };
+
     let required = meta.total_mib + kv_mib(meta.n_layers, ctx);
     let pool = gpu_pool + cpu_pool;
     let (fit, detail) = if required + required / 10 <= pool {
-        (Fit::Fits, format!("fits — ~{} MiB headroom across {} MiB GPU + {} MiB CPU",
-            pool.saturating_sub(required), gpu_pool, cpu_pool))
+        (Fit::Fits, format!("fits — ~{} MiB headroom across {} MiB GPU + {} MiB CPU{}",
+            pool.saturating_sub(required), gpu_pool, cpu_pool, roomiest_suffix))
     } else if required <= pool {
-        (Fit::Tight, format!("tight — needs {} MiB, pool is {} MiB ({} GPU + {} CPU)",
-            required, pool, gpu_pool, cpu_pool))
+        (Fit::Tight, format!("tight — needs {} MiB, pool is {} MiB ({} GPU + {} CPU){}",
+            required, pool, gpu_pool, cpu_pool, roomiest_suffix))
     } else {
-        (Fit::WontFit, format!("won't fit — needs {} MiB but pool is only {} MiB ({} GPU + {} CPU); add memory or use a smaller quant",
-            required, pool, gpu_pool, cpu_pool))
+        (Fit::WontFit, format!("won't fit — needs {} MiB but pool is only {} MiB ({} GPU + {} CPU); add memory or use a smaller quant{}",
+            required, pool, gpu_pool, cpu_pool, roomiest_suffix))
     };
     Plan { ngl, tensor_split, cpu_moe, exclude_notes,
-        fit: FitVerdict { fit, detail }, gpu_pool_mib: gpu_pool, cpu_pool_mib: cpu_pool }
+        fit: FitVerdict { fit, detail }, gpu_pool_mib: gpu_pool, cpu_pool_mib: cpu_pool,
+        warnings: Vec::new() }
 }
 
 #[cfg(test)]
@@ -173,6 +188,7 @@ mod tests {
             exclude_notes: vec!["drop Vulkan0".into()],
             fit: FitVerdict { fit: Fit::Tight, detail: "tight".into() },
             gpu_pool_mib: 21000, cpu_pool_mib: 26000,
+            warnings: vec![],
         };
         let j = serde_json::to_string(&p).unwrap();
         assert_eq!(p, serde_json::from_str::<Plan>(&j).unwrap());

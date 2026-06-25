@@ -523,7 +523,14 @@
         manual.value = "manual";
         manual.textContent = "(manual)";
         sel.appendChild(manual);
-      } catch (_) {}
+      } catch (e) {
+        console.warn("catalog load failed", e);
+        const sel = document.getElementById("model-select");
+        if (sel) {
+          const opt = sel.options[0];
+          if (opt) opt.textContent = "catalog unavailable — use (manual)";
+        }
+      }
     }
 
     document.getElementById("model-select").addEventListener("change", (e) => {
@@ -619,12 +626,19 @@
           notesHtml = `<ul class="fit-notes">${items}</ul>`;
         }
 
+        let warningsHtml = "";
+        if (plan.warnings && plan.warnings.length > 0) {
+          const items = plan.warnings.map(w => `<li>⚠ version mismatch: ${escapeHtml(w)}</li>`).join("");
+          warningsHtml = `<ul class="fit-notes">${items}</ul>`;
+        }
+
         resultEl.innerHTML =
           `<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:4px;">` +
           `<span class="fit-chip ${chipClass}">${chipLabel}</span>` +
           `<span class="fit-detail">${fitDetail}</span>` +
           `</div>` +
-          notesHtml;
+          notesHtml +
+          warningsHtml;
       } catch (e) {
         resultEl.innerHTML = "<span class='status-err'>✗ " + escapeHtml(e.message) + "</span>";
       }

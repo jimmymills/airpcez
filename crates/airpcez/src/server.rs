@@ -202,12 +202,16 @@ async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestReque
     -> Json<airpcez_core::planner::Plan> {
     use airpcez_core::cluster::*;
     let self_stats = s.provider.sample();
+    let self_version = self_stats.binary_version.clone();
     let self_snap = NodeSnapshot {
         entry: NodeEntry { name: self_stats.name.clone(), addr: "self".into() },
         stats: Some(self_stats), reachable: true, error: None,
     };
     let nodes = { s.nodes.lock().unwrap().clone() };
     let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
+    let warnings = airpcez_core::cluster::version_warnings(self_version.as_deref(), &cluster.nodes);
     cluster.nodes.insert(0, self_snap);
-    Json(airpcez_core::planner::suggest_plan(&cluster, &req.meta, req.ctx))
+    let mut plan = airpcez_core::planner::suggest_plan(&cluster, &req.meta, req.ctx);
+    plan.warnings = warnings;
+    Json(plan)
 }
