@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod config;
 pub mod poller;
 pub mod server;
