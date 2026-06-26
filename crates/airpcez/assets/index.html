@@ -679,6 +679,16 @@
     loadCatalog();
     loadProfiles();
 
+    // Pre-fill the launch cache-dir from the host config default (when the user hasn't
+    // typed one), so it's visible and captured when saving a new profile.
+    (async () => {
+      try {
+        const cfg = await (await fetch("/config")).json();
+        const el = document.getElementById("hf-cache-dir");
+        if (cfg.hf_cache_dir && !el.value.trim()) el.value = cfg.hf_cache_dir;
+      } catch (e) { /* non-fatal */ }
+    })();
+
     // ─── Suggest settings button ───────────────────────────────────────────────
     document.getElementById("btn-suggest").addEventListener("click", async () => {
       const resultEl = document.getElementById("suggest-result");
