@@ -21,6 +21,12 @@ pub struct LlamaServerOpts<'a> {
     pub device: Option<&'a str>,
     pub cpu_moe: &'a CpuMoe,
     pub ctx: Option<u32>,
+    pub no_mmap: bool,
+    pub flash_attn: Option<&'a str>,
+    pub threads: Option<u32>,
+    pub threads_batch: Option<u32>,
+    pub cache_type_k: Option<&'a str>,
+    pub cache_type_v: Option<&'a str>,
     pub host: &'a str,
     pub port: u16,
 }
@@ -68,6 +74,29 @@ pub fn llama_server_spec(opts: &LlamaServerOpts) -> ProcSpec {
     if let Some(c) = opts.ctx {
         args.push("-c".into());
         args.push(c.to_string());
+    }
+    if opts.no_mmap {
+        args.push("--no-mmap".into());
+    }
+    if let Some(fa) = opts.flash_attn {
+        args.push("-fa".into());
+        args.push(fa.into());
+    }
+    if let Some(t) = opts.threads {
+        args.push("--threads".into());
+        args.push(t.to_string());
+    }
+    if let Some(tb) = opts.threads_batch {
+        args.push("--threads-batch".into());
+        args.push(tb.to_string());
+    }
+    if let Some(ck) = opts.cache_type_k {
+        args.push("--cache-type-k".into());
+        args.push(ck.into());
+    }
+    if let Some(cv) = opts.cache_type_v {
+        args.push("--cache-type-v".into());
+        args.push(cv.into());
     }
     args.push("--host".into());
     args.push(opts.host.into());
@@ -118,6 +147,8 @@ mod tests {
             device: None,
             cpu_moe: &CpuMoe::All,
             ctx: Some(8192),
+            no_mmap: false, flash_attn: None, threads: None, threads_batch: None,
+            cache_type_k: None, cache_type_v: None,
             host: "0.0.0.0",
             port: 8080,
         };
@@ -158,6 +189,8 @@ mod tests {
             device: Some("RPC0,RPC1"),
             cpu_moe: &CpuMoe::Off,
             ctx: Some(4096),
+            no_mmap: false, flash_attn: None, threads: None, threads_batch: None,
+            cache_type_k: None, cache_type_v: None,
             host: "0.0.0.0",
             port: 8080,
         };
@@ -200,6 +233,8 @@ mod tests {
             device: None,
             cpu_moe: &CpuMoe::NLayers(32),
             ctx: None,
+            no_mmap: false, flash_attn: None, threads: None, threads_batch: None,
+            cache_type_k: None, cache_type_v: None,
             host: "127.0.0.1",
             port: 8080,
         };
@@ -217,6 +252,48 @@ mod tests {
                 "127.0.0.1",
                 "--port",
                 "8080",
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_perf_flags_argv() {
+        let model = ModelRef::Hf("repo:Q4_K_M".into());
+        let opts = LlamaServerOpts {
+            binary: "llama-server",
+            model: &model,
+            rpc_endpoints: &[],
+            ngl: Some(99),
+            tensor_split: None,
+            main_gpu: None,
+            device: None,
+            cpu_moe: &CpuMoe::All,
+            ctx: Some(8192),
+            no_mmap: true,
+            flash_attn: Some("on"),
+            threads: Some(8),
+            threads_batch: Some(4),
+            cache_type_k: Some("q8_0"),
+            cache_type_v: Some("q8_0"),
+            host: "0.0.0.0",
+            port: 8080,
+        };
+        let spec = llama_server_spec(&opts);
+        assert_eq!(
+            spec.args,
+            vec![
+                "-hf", "repo:Q4_K_M",
+                "-ngl", "99",
+                "--cpu-moe",
+                "-c", "8192",
+                "--no-mmap",
+                "-fa", "on",
+                "--threads", "8",
+                "--threads-batch", "4",
+                "--cache-type-k", "q8_0",
+                "--cache-type-v", "q8_0",
+                "--host", "0.0.0.0",
+                "--port", "8080",
             ]
         );
     }

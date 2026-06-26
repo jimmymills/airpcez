@@ -33,6 +33,15 @@ pub struct Plan {
     pub cpu_pool_mib: u64,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Recommended flash-attention setting for the launch (e.g. "on").
+    #[serde(default)]
+    pub flash_attn: Option<String>,
+    /// Recommend `--no-mmap` (true when experts are offloaded to CPU).
+    #[serde(default)]
+    pub no_mmap: bool,
+    /// Which node to run llama-server on, and why (highest-RAM node).
+    #[serde(default)]
+    pub host_hint: Option<String>,
 }
 
 /// Rough KV-cache size: ~0.125 MiB per layer per 1024 context tokens.
@@ -89,11 +98,23 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
         cpu_pool += st.ram_free_mib.saturating_sub(CPU_HEADROOM_MIB + unified_vram);
     }
     let per_layer = (meta.total_mib / meta.n_layers.max(1) as u64).max(1);
-    let ngl = ((gpu_pool / per_layer) as u32).min(meta.n_layers);
     let tensor_split = ratio_string(&splits);
-    let cpu_moe = if meta.is_moe {
-        Some(if gpu_pool >= meta.total_mib { "off".to_string() } else { "all".to_string() })
-    } else { None };
+    // MoE: keep every layer's attention/router on GPU (-ngl = n_layers) and spill only the
+    // bulky expert FFNs to CPU, sized to the GPU shortfall as a PARTIAL --n-cpu-moe count —
+    // never the all-or-nothing "all" that dumps ~all experts onto one host CPU and swaps.
+    // Dense models keep the original "fill the GPU pool" behavior.
+    let (ngl, cpu_moe, no_mmap) = if meta.is_moe {
+        let shortfall = meta.total_mib.saturating_sub(gpu_pool);
+        if shortfall == 0 {
+            (meta.n_layers, Some("off".to_string()), false)
+        } else {
+            let n = ((shortfall + per_layer - 1) / per_layer).min(meta.n_layers as u64) as u32;
+            let s = if n >= meta.n_layers { "all".to_string() } else { n.to_string() };
+            (meta.n_layers, Some(s), true)
+        }
+    } else {
+        (((gpu_pool / per_layer) as u32).min(meta.n_layers), None, false)
+    };
 
     let roomiest_suffix = match &roomiest {
         Some((name, mib)) => format!(" — roomiest GPU {name} {mib} MiB"),
@@ -112,9 +133,18 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
         (Fit::WontFit, format!("won't fit — needs {} MiB but pool is only {} MiB ({} GPU + {} CPU); add memory or use a smaller quant{}",
             required, pool, gpu_pool, cpu_pool, roomiest_suffix))
     };
+    // Recommend hosting llama-server on the highest-RAM node — never a small box for a big model.
+    let host_hint = cluster.nodes.iter()
+        .filter_map(|n| n.stats.as_ref().map(|s| (n.entry.name.clone(), s.ram_total_mib)))
+        .max_by_key(|&(_, ram)| ram)
+        .map(|(name, ram)| format!(
+            "run llama-server on '{name}' — most RAM ({ram} MiB); a {} MiB model will swap on any node with less",
+            meta.total_mib));
+
     Plan { ngl, tensor_split, cpu_moe, exclude_notes,
         fit: FitVerdict { fit, detail }, gpu_pool_mib: gpu_pool, cpu_pool_mib: cpu_pool,
-        warnings: Vec::new() }
+        warnings: Vec::new(),
+        flash_attn: Some("on".to_string()), no_mmap, host_hint }
 }
 
 #[cfg(test)]
@@ -189,6 +219,7 @@ mod tests {
             fit: FitVerdict { fit: Fit::Tight, detail: "tight".into() },
             gpu_pool_mib: 21000, cpu_pool_mib: 26000,
             warnings: vec![],
+            flash_attn: Some("on".into()), no_mmap: true, host_hint: Some("host on big-box".into()),
         };
         let j = serde_json::to_string(&p).unwrap();
         assert_eq!(p, serde_json::from_str::<Plan>(&j).unwrap());
@@ -211,5 +242,53 @@ mod tests {
         assert_eq!(ratio_string(&[8000]).as_deref(), Some("8"));
         assert_eq!(ratio_string(&[]), None);
         assert_eq!(ratio_string(&[0, 0]), None);
+    }
+
+    #[test]
+    fn moe_partial_cpu_offload_when_gpu_short() {
+        // 21 GB MoE, 48 layers, on a single 8 GB GPU: most experts must spill to CPU —
+        // but as a PARTIAL --n-cpu-moe count, never the all-or-nothing "all" that swamped the host.
+        let cluster = ClusterStatus {
+            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)])],
+            warnings: vec![],
+        };
+        let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: true };
+        let p = suggest_plan(&cluster, &meta, 8192);
+        assert_eq!(p.ngl, 48, "MoE keeps every layer's attention on GPU (-ngl = n_layers)");
+        let n: u32 = p.cpu_moe.as_deref().expect("cpu_moe set for MoE")
+            .parse().expect("cpu_moe is a partial layer count, not all/off");
+        assert!(n > 0 && n < 48, "partial offload expected, got {n}");
+        assert!(n >= 20, "GPU holds little here, so most expert layers offload: {n}");
+        assert!(p.no_mmap, "--no-mmap recommended when experts live on CPU");
+    }
+
+    #[test]
+    fn moe_no_offload_when_gpu_roomy() {
+        // Whole 21 GB MoE fits on a 24 GB GPU → no CPU experts, mmap fine.
+        let cluster = ClusterStatus {
+            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 24576, 24000, true)])],
+            warnings: vec![],
+        };
+        let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: true };
+        let p = suggest_plan(&cluster, &meta, 8192);
+        assert_eq!(p.cpu_moe.as_deref(), Some("off"));
+        assert!(!p.no_mmap);
+        assert_eq!(p.ngl, 48);
+    }
+
+    #[test]
+    fn recommends_flash_attn_and_roomiest_host() {
+        let cluster = ClusterStatus {
+            nodes: vec![
+                node("small-mac", 16000, vec![gpu("MTL0", DeviceKind::Metal, 12000, 10000, true)]),
+                node("big-box",   64000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            ],
+            warnings: vec![],
+        };
+        let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: true };
+        let p = suggest_plan(&cluster, &meta, 8192);
+        assert_eq!(p.flash_attn.as_deref(), Some("on"));
+        let hint = p.host_hint.expect("host hint present");
+        assert!(hint.contains("big-box"), "should recommend the highest-RAM node: {hint}");
     }
 }

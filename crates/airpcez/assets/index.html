@@ -256,6 +256,33 @@
             <label for="launch-cpu-moe-n">CPU MoE n-experts</label>
             <input id="launch-cpu-moe-n" type="number" placeholder="2" min="1" />
           </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="launch-flash-attn">Flash attention (-fa)</label>
+              <select id="launch-flash-attn">
+                <option value="">default</option>
+                <option value="on">on</option>
+                <option value="off">off</option>
+                <option value="auto">auto</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <label for="launch-threads">CPU threads (--threads)</label>
+              <input id="launch-threads" type="number" placeholder="auto" min="1" />
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="launch-threads-batch">Batch threads (--threads-batch)</label>
+              <input id="launch-threads-batch" type="number" placeholder="auto" min="1" />
+            </div>
+            <div class="field-row" style="margin-bottom:10px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input id="launch-no-mmap" type="checkbox" />
+                <span style="font-size:0.78rem; color:#8b949e;">No mmap (--no-mmap) — faster CPU-MoE</span>
+              </label>
+            </div>
+          </div>
           <div class="btn-row">
             <button class="btn-green" id="btn-launch">Launch</button>
             <button class="btn-default" id="btn-suggest">Suggest settings</button>
@@ -677,15 +704,23 @@
         if (plan.tensor_split !== undefined && plan.tensor_split !== null) {
           document.getElementById("launch-tensor-split").value = plan.tensor_split;
         }
-        // cpu_moe: "all" → all, "off"/null → off (clear custom)
+        // cpu_moe: "all" → all, a number → custom n-cpu-moe, "off"/null → off
         const cpuMoeEl = document.getElementById("launch-cpu-moe");
+        const cpuMoeCustomRow = document.getElementById("cpu-moe-custom-row");
         if (plan.cpu_moe === "all") {
           cpuMoeEl.value = "all";
-          document.getElementById("cpu-moe-custom-row").style.display = "none";
+          cpuMoeCustomRow.style.display = "none";
+        } else if (plan.cpu_moe && /^\d+$/.test(plan.cpu_moe)) {
+          cpuMoeEl.value = "custom";
+          cpuMoeCustomRow.style.display = "";
+          document.getElementById("launch-cpu-moe-n").value = plan.cpu_moe;
         } else {
           cpuMoeEl.value = "";
-          document.getElementById("cpu-moe-custom-row").style.display = "none";
+          cpuMoeCustomRow.style.display = "none";
         }
+        // Recommended perf flags from the plan
+        if (plan.flash_attn) document.getElementById("launch-flash-attn").value = plan.flash_attn;
+        document.getElementById("launch-no-mmap").checked = !!plan.no_mmap;
 
         // Render fit-verdict chip
         const fit = plan.fit || {};
@@ -708,13 +743,19 @@
           warningsHtml = `<ul class="fit-notes">${items}</ul>`;
         }
 
+        let hostHintHtml = "";
+        if (plan.host_hint) {
+          hostHintHtml = `<div class="fit-detail" style="margin-top:6px;">🖥 ${escapeHtml(plan.host_hint)}</div>`;
+        }
+
         resultEl.innerHTML =
           `<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:4px;">` +
           `<span class="fit-chip ${chipClass}">${chipLabel}</span>` +
           `<span class="fit-detail">${fitDetail}</span>` +
           `</div>` +
           notesHtml +
-          warningsHtml;
+          warningsHtml +
+          hostHintHtml;
       } catch (e) {
         resultEl.innerHTML = "<span class='status-err'>✗ " + escapeHtml(e.message) + "</span>";
       }
@@ -805,6 +846,10 @@
       const cpuMoeSelect = document.getElementById("launch-cpu-moe").value;
       const cpuMoeN = document.getElementById("launch-cpu-moe-n").value.trim();
       const hfCacheDir = document.getElementById("hf-cache-dir").value.trim();
+      const flashAttn = document.getElementById("launch-flash-attn").value;
+      const threadsVal = document.getElementById("launch-threads").value.trim();
+      const threadsBatchVal = document.getElementById("launch-threads-batch").value.trim();
+      const noMmap = document.getElementById("launch-no-mmap").checked;
 
       const body = {};
       if (modelHf) body.model_hf = modelHf;
@@ -817,6 +862,10 @@
       if (cpuMoeSelect === "all") body.cpu_moe = "all";
       else if (cpuMoeSelect === "custom" && cpuMoeN) body.cpu_moe = cpuMoeN;
       if (hfCacheDir) body.hf_cache_dir = hfCacheDir;
+      if (flashAttn) body.flash_attn = flashAttn;
+      if (threadsVal !== "") body.threads = parseInt(threadsVal, 10);
+      if (threadsBatchVal !== "") body.threads_batch = parseInt(threadsBatchVal, 10);
+      if (noMmap) body.no_mmap = true;
 
       try {
         const resp = await fetch("/host/launch", {

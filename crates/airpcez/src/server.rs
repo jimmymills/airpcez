@@ -181,6 +181,42 @@ struct LaunchRequest {
     cpu_moe: Option<String>,
     ctx: Option<u32>,
     hf_cache_dir: Option<String>,
+    no_mmap: Option<bool>,
+    flash_attn: Option<String>,
+    threads: Option<u32>,
+    threads_batch: Option<u32>,
+    cache_type_k: Option<String>,
+    cache_type_v: Option<String>,
+}
+
+/// Build the `llama-server` ProcSpec from a launch request + resolved model/endpoints.
+/// Pure (no I/O) so the flag wiring is unit-testable.
+fn build_launch_spec(
+    req: &LaunchRequest,
+    model: &airpcez_core::flags::ModelRef,
+    binary: &str,
+    llama_port: u16,
+    eps: &[String],
+) -> airpcez_core::process::ProcSpec {
+    use airpcez_core::flags::*;
+    let cpu_moe = match req.cpu_moe.as_deref() {
+        Some("all") => CpuMoe::All,
+        Some("off") | None => CpuMoe::Off,
+        Some(n) => match n.parse::<u32>() { Ok(v) => CpuMoe::NLayers(v), Err(_) => CpuMoe::Off },
+    };
+    let opts = LlamaServerOpts {
+        binary, model, rpc_endpoints: eps,
+        ngl: req.ngl, tensor_split: req.tensor_split.as_deref(), main_gpu: req.main_gpu,
+        device: req.device.as_deref(), cpu_moe: &cpu_moe, ctx: req.ctx,
+        no_mmap: req.no_mmap.unwrap_or(false),
+        flash_attn: req.flash_attn.as_deref(),
+        threads: req.threads,
+        threads_batch: req.threads_batch,
+        cache_type_k: req.cache_type_k.as_deref(),
+        cache_type_v: req.cache_type_v.as_deref(),
+        host: "0.0.0.0", port: llama_port,
+    };
+    llama_server_spec(&opts)
 }
 
 /// "unsloth/Qwen3.6-35B-A3B-GGUF" -> "models--unsloth--Qwen3.6-35B-A3B-GGUF" (HF hub layout).
@@ -267,7 +303,7 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
     // Effective HF cache dir: per-launch field overrides the host config default.
     let cache_dir = req.hf_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
         .or(hf_cache_dir_cfg.as_deref());
-    let model = match (req.model_hf, req.model_path) {
+    let model = match (req.model_hf.as_deref(), req.model_path.as_deref()) {
         (Some(hf), _) if !hf.trim().is_empty() => {
             let hf = hf.trim();
             // Prefer a locally-cached copy (load via -m, no download) when a cache dir is set.
@@ -282,11 +318,6 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
         },
         _ => return (StatusCode::BAD_REQUEST, "model_hf or model_path required".to_string()).into_response(),
     };
-    let cpu_moe = match req.cpu_moe.as_deref() {
-        Some("all") => CpuMoe::All,
-        Some("off") | None => CpuMoe::Off,
-        Some(n) => match n.parse::<u32>() { Ok(v) => CpuMoe::NLayers(v), Err(_) => CpuMoe::Off },
-    };
     let nodes = { s.config.lock().unwrap().nodes.clone() };
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     let eps: Vec<String> = cluster.nodes.iter()
@@ -296,13 +327,8 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
         Some(d) => format!("{d}/llama-server"),
         None => "llama-server".to_string(),
     };
-    let opts = LlamaServerOpts {
-        binary: &binary, model: &model, rpc_endpoints: &eps,
-        ngl: req.ngl, tensor_split: req.tensor_split.as_deref(), main_gpu: req.main_gpu,
-        device: req.device.as_deref(), cpu_moe: &cpu_moe, ctx: req.ctx,
-        host: "0.0.0.0", port: llama_port,
-    };
-    match s.supervisor.start(llama_server_spec(&opts)) {
+    let spec = build_launch_spec(&req, &model, &binary, llama_port, &eps);
+    match s.supervisor.start(spec) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({
             "openai_url": format!("http://localhost:{}/v1", llama_port)
         }))).into_response(),
@@ -445,5 +471,26 @@ mod tests {
         // Not in the cache → None (caller then falls back to a real -hf download).
         assert_eq!(super::resolve_hf_in_cache(cache, "unsloth/Bar-GGUF:Q4_K_M"), None);
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn launch_spec_wires_perf_flags() {
+        let req = super::LaunchRequest {
+            model_hf: Some("repo:Q4_K_M".into()), model_path: None,
+            ngl: Some(99), tensor_split: None, main_gpu: None, device: None,
+            cpu_moe: Some("all".into()), ctx: Some(8192), hf_cache_dir: None,
+            no_mmap: Some(true), flash_attn: Some("on".into()),
+            threads: Some(8), threads_batch: Some(4),
+            cache_type_k: Some("q8_0".into()), cache_type_v: Some("q8_0".into()),
+        };
+        let model = airpcez_core::flags::ModelRef::Hf("repo:Q4_K_M".into());
+        let spec = super::build_launch_spec(&req, &model, "llama-server", 8080, &[]);
+        let a = spec.args.join(" ");
+        assert!(a.contains("--no-mmap"), "argv: {a}");
+        assert!(a.contains("-fa on"), "argv: {a}");
+        assert!(a.contains("--threads 8"), "argv: {a}");
+        assert!(a.contains("--threads-batch 4"), "argv: {a}");
+        assert!(a.contains("--cache-type-k q8_0"), "argv: {a}");
+        assert!(a.contains("--cache-type-v q8_0"), "argv: {a}");
     }
 }
