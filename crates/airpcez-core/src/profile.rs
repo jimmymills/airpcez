@@ -6,7 +6,7 @@ use std::path::Path;
 /// SCALAR FIELDS FIRST, `nodes` LAST — TOML requires values before arrays-of-tables.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct Profile {
-    pub id: String,
+    #[serde(default)] pub id: String,
     pub name: String,
     pub model: String,
     #[serde(default)] pub ngl: Option<u32>,

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, State,
     },
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -36,6 +36,16 @@ impl AppState {
             bound_ui_port: 8675,
         }
     }
+
+    /// `airpcez-profiles.toml` beside the config file (per-config unique → test-safe).
+    pub fn profiles_path(&self) -> std::path::PathBuf {
+        let stem = self
+            .config_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("airpcez");
+        self.config_path.with_file_name(format!("{stem}-profiles.toml"))
+    }
 }
 
 pub async fn run_server(port: u16, state: AppState) {
@@ -54,6 +64,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/catalog", get(catalog_handler))
         .route("/suggest", post(suggest_handler))
         .route("/config", get(get_config).post(post_config))
+        .route("/profiles", get(list_profiles).post(upsert_profile).delete(delete_profile))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -291,6 +302,53 @@ fn resolve_hf_in_cache(cache_dir: &str, hf: &str) -> Option<String> {
         return None;
     }
     find_gguf_in_dir(&repo_dir, quant)
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+use airpcez_core::profile::{slugify, Profile, ProfileStore};
+
+#[derive(serde::Deserialize)]
+struct ProfilesQuery {
+    model: Option<String>,
+}
+
+async fn list_profiles(State(s): State<AppState>, Query(q): Query<ProfilesQuery>) -> Json<Vec<Profile>> {
+    let store = ProfileStore::load(&s.profiles_path());
+    Json(store.list(q.model.as_deref()).into_iter().cloned().collect())
+}
+
+async fn upsert_profile(State(s): State<AppState>, Json(mut p): Json<Profile>) -> impl IntoResponse {
+    if p.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "profile name required".to_string()).into_response();
+    }
+    if p.id.trim().is_empty() {
+        p.id = slugify(&p.name);
+    }
+    p.updated_at = now_unix();
+    let mut store = ProfileStore::load(&s.profiles_path());
+    store.upsert(p);
+    match store.save(&s.profiles_path()) {
+        Ok(()) => Json(store.profiles).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ProfileIdBody {
+    id: String,
+}
+
+async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody>) -> Json<Vec<Profile>> {
+    let mut store = ProfileStore::load(&s.profiles_path());
+    store.remove(&req.id);
+    let _ = store.save(&s.profiles_path());
+    Json(store.profiles)
 }
 
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {

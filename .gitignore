@@ -3,3 +3,4 @@
 **/*.gguf
 .DS_Store
 /airpcez.toml
+airpcez-profiles.toml
