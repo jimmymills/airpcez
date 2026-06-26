@@ -57,9 +57,16 @@ git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp "$WORK
 cd "$WORK/llama.cpp"
 
 # Common CMake flags: enable Metal + RPC, disable everything that won't link on iOS.
+# The OFF set mirrors llama.cpp's own build-xcframework.sh (canonical reference); we add
+# GGML_RPC (upstream doesn't). Every executable-producing target MUST be OFF — they need an
+# iOS bundle id / signing and break the static-lib build. APP (the unified "llama" binary)
+# and SERVER default ON for a standalone build, so disabling EXAMPLES/TOOLS/TESTS alone is
+# NOT enough — APP and SERVER must be set explicitly (this was the b9789 build failure).
 common_flags=(
   -DGGML_METAL=ON -DGGML_RPC=ON
   -DGGML_METAL_EMBED_LIBRARY=ON          # bake the .metallib into the binary (no bundle path)
+  -DGGML_METAL_USE_BF16=ON               # bf16 Metal kernels (matches upstream xcframework build)
+  -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_COMMON=OFF
   -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF
   -DLLAMA_CURL=OFF
   -DBUILD_SHARED_LIBS=OFF
