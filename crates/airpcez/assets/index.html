@@ -217,6 +217,16 @@
             <input id="hf-cache-dir" type="text" placeholder="/mnt/ssd/llama/models" />
             <div class="input-hint">If set, a catalog / -hf pick loads from this HF cache (models--org--repo/…) via -m — no download. Defaults to the host config.</div>
           </div>
+          <div class="field-row" id="profiles-row" style="margin-bottom:12px;">
+            <label>Profiles (for selected model)</label>
+            <div id="profiles-list" style="font-size:0.8rem; color:#8b949e;">—</div>
+            <div class="btn-row" style="margin-top:6px;">
+              <input id="profile-name" type="text" placeholder="profile name" style="max-width:160px;" />
+              <input id="profile-note" type="text" placeholder="note (optional)" style="max-width:160px;" />
+              <input id="profile-toks" type="number" step="0.01" placeholder="tok/s" style="max-width:80px;" />
+              <button class="btn-default btn-small" id="btn-save-profile">Save current</button>
+            </div>
+          </div>
           <div class="grid-2">
             <div class="field-row">
               <label for="launch-ngl">GPU layers (-ngl)</label>
@@ -388,6 +398,12 @@
 
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function currentModelRef() {
+      const hf = document.getElementById("model-hf").value.trim();
+      const path = document.getElementById("model-path").value.trim();
+      return hf || path || "";
     }
 
     function barPct(free, total) {
@@ -645,6 +661,7 @@
       }
       // Clear any previous suggest result when selection changes
       document.getElementById("suggest-result").innerHTML = "";
+      loadProfiles();
     });
 
     // Model source is -hf OR a local path, never both — keep them mutually exclusive so a
@@ -660,6 +677,7 @@
     });
 
     loadCatalog();
+    loadProfiles();
 
     // ─── Suggest settings button ───────────────────────────────────────────────
     document.getElementById("btn-suggest").addEventListener("click", async () => {
@@ -941,6 +959,106 @@
 
     document.getElementById("btn-stop").addEventListener("click", () => {
       workerAction("/worker/stop", null);
+    });
+
+    // ─── Profiles ──────────────────────────────────────────────────────────────
+    async function loadProfiles() {
+      const model = currentModelRef();
+      const listEl = document.getElementById("profiles-list");
+      try {
+        const url = model ? `/profiles?model=${encodeURIComponent(model)}` : "/profiles";
+        const profiles = await (await fetch(url)).json();
+        if (!profiles.length) { listEl.innerHTML = "<em>none saved for this model</em>"; return; }
+        listEl.innerHTML = profiles.map(p => {
+          const toks = (p.tok_s != null) ? ` · ${p.tok_s} tok/s` : "";
+          const nodes = ` · ${(p.nodes || []).length} node(s)`;
+          const note = p.note ? ` · ${escapeHtml(p.note)}` : "";
+          return `<div style="display:flex; align-items:center; gap:8px; padding:3px 0;">
+            <strong>${escapeHtml(p.name)}</strong><span>${toks}${nodes}${note}</span>
+            <button class="btn-default btn-small" data-load="${escapeHtml(p.id)}">Load</button>
+            <button class="btn-green btn-small" data-launch="${escapeHtml(p.id)}">Launch</button>
+            <button class="btn-danger btn-small" data-del="${escapeHtml(p.id)}">✕</button>
+          </div>`;
+        }).join("");
+      } catch (e) {
+        listEl.innerHTML = `<span class='status-err'>✗ ${escapeHtml(e.message)}</span>`;
+      }
+    }
+
+    function setVal(id, v) { document.getElementById(id).value = (v == null ? "" : v); }
+
+    function fillFormFromProfile(p) {
+      if (p.model && p.model.includes(".gguf")) { setVal("model-path", p.model); setVal("model-hf", ""); }
+      else { setVal("model-hf", p.model); setVal("model-path", ""); }
+      setVal("launch-ngl", p.ngl);
+      setVal("launch-ctx", p.ctx);
+      setVal("launch-tensor-split", p.tensor_split);
+      setVal("launch-main-gpu", p.main_gpu);
+      setVal("launch-device", p.device);
+      setVal("hf-cache-dir", p.hf_cache_dir);
+      setVal("launch-flash-attn", p.flash_attn || "");
+      setVal("launch-threads", p.threads);
+      setVal("launch-threads-batch", p.threads_batch);
+      document.getElementById("launch-no-mmap").checked = !!p.no_mmap;
+      const cpuMoeEl = document.getElementById("launch-cpu-moe");
+      const customRow = document.getElementById("cpu-moe-custom-row");
+      if (p.cpu_moe === "all") { cpuMoeEl.value = "all"; customRow.style.display = "none"; }
+      else if (p.cpu_moe && /^\d+$/.test(p.cpu_moe)) { cpuMoeEl.value = "custom"; customRow.style.display = ""; setVal("launch-cpu-moe-n", p.cpu_moe); }
+      else { cpuMoeEl.value = ""; customRow.style.display = "none"; }
+    }
+
+    document.getElementById("profiles-list").addEventListener("click", async (e) => {
+      const t = e.target;
+      if (t.dataset.load) {
+        const p = await (await fetch(`/profiles/${encodeURIComponent(t.dataset.load)}/apply`, { method: "POST" })).json();
+        fillFormFromProfile(p);
+      } else if (t.dataset.launch) {
+        const resultEl = document.getElementById("launch-result");
+        resultEl.innerHTML = "<span class='status-info'>launching…</span>";
+        const resp = await fetch(`/profiles/${encodeURIComponent(t.dataset.launch)}/launch`, { method: "POST" });
+        if (resp.ok) {
+          const data = await resp.json();
+          const openaiUrl = data.openai_url || "";
+          const chatBase = openaiUrl.replace(/\/v1$/, "");
+          startHealthPolling(openaiUrl, chatBase, resultEl);
+          startLogsPolling();
+        } else {
+          resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + (await resp.text()).slice(0, 200) + "</span>";
+        }
+      } else if (t.dataset.del) {
+        await fetch("/profiles", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: t.dataset.del }) });
+        loadProfiles();
+      }
+    });
+
+    document.getElementById("btn-save-profile").addEventListener("click", async () => {
+      const name = document.getElementById("profile-name").value.trim();
+      if (!name) { alert("profile name required"); return; }
+      const cpuMoeSelect = document.getElementById("launch-cpu-moe").value;
+      const cpuMoeN = document.getElementById("launch-cpu-moe-n").value.trim();
+      const num = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : parseInt(v, 10); };
+      const str = (id) => { const v = document.getElementById(id).value.trim(); return v === "" ? null : v; };
+      const toks = document.getElementById("profile-toks").value.trim();
+      const cluster = await (await fetch("/cluster")).json();
+      const nodes = (cluster.nodes || []).filter(n => n.entry && n.entry.addr && n.entry.addr !== "self")
+        .map(n => ({ name: n.entry.name, addr: n.entry.addr }));
+      const body = {
+        name,
+        model: currentModelRef(),
+        ngl: num("launch-ngl"), ctx: num("launch-ctx"),
+        tensor_split: str("launch-tensor-split"), main_gpu: num("launch-main-gpu"),
+        device: str("launch-device"), hf_cache_dir: str("hf-cache-dir"),
+        flash_attn: (str("launch-flash-attn") || null),
+        threads: num("launch-threads"), threads_batch: num("launch-threads-batch"),
+        no_mmap: document.getElementById("launch-no-mmap").checked,
+        cpu_moe: cpuMoeSelect === "all" ? "all" : (cpuMoeSelect === "custom" && cpuMoeN ? cpuMoeN : null),
+        note: str("profile-note"),
+        tok_s: toks === "" ? null : parseFloat(toks),
+        nodes,
+      };
+      await fetch("/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      document.getElementById("profile-name").value = "";
+      loadProfiles();
     });
 
     // ─── Settings panel ────────────────────────────────────────────────────────
