@@ -1,4 +1,0 @@
-module RpcShim {
-    header "rpc_shim.h"
-    export *
-}

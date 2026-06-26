@@ -3,4 +3,4 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 Frameworks/llama.xcframework/
-Generated/LlamaVersion.swift
+AirpcezWorker/LlamaVersion.swift

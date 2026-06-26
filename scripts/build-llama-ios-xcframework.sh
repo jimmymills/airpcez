@@ -7,7 +7,7 @@ TAG="${LLAMA_TAG:-b9789}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/.llama-ios-build"
 OUT="$ROOT/ios/AirpcezWorker/Frameworks"
-GEN="$ROOT/ios/AirpcezWorker/Generated"
+GEN="$ROOT/ios/AirpcezWorker/AirpcezWorker"   # Xcode target's synced folder (auto-compiled)
 
 rm -rf "$WORK" && mkdir -p "$WORK" "$OUT" "$GEN"
 git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp "$WORK/llama.cpp"
