@@ -85,7 +85,7 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
                 if matches!(d.kind, crate::model::DeviceKind::Metal) {
                     unified_vram += d.vram_free_mib;
                 }
-                if roomiest.as_ref().map_or(true, |(_, best)| usable > *best) {
+                if roomiest.as_ref().is_none_or(|(_, best)| usable > *best) {
                     roomiest = Some((format!("{}/{}", n.entry.name, d.name), usable));
                 }
             } else if !d.reliable {
@@ -108,7 +108,7 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
         if shortfall == 0 {
             (meta.n_layers, Some("off".to_string()), false)
         } else {
-            let n = ((shortfall + per_layer - 1) / per_layer).min(meta.n_layers as u64) as u32;
+            let n = shortfall.div_ceil(per_layer).min(meta.n_layers as u64) as u32;
             let s = if n >= meta.n_layers { "all".to_string() } else { n.to_string() };
             (meta.n_layers, Some(s), true)
         }

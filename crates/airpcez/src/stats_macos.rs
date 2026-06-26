@@ -1,7 +1,7 @@
 fn pages_named(vm_stat: &str, label: &str) -> u64 {
     vm_stat.lines()
         .find(|l| l.trim_start().starts_with(label))
-        .and_then(|l| l.rsplit(|c: char| c == ' ' || c == ':')
+        .and_then(|l| l.rsplit([' ', ':'])
             .map(|t| t.trim().trim_end_matches('.'))
             .find(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())))
         .and_then(|n| n.parse().ok())
