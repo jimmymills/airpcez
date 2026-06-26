@@ -23,9 +23,9 @@ fn real_free_ram_mib(fallback_mib: u64) -> u64 { fallback_mib }
 impl StatsProvider for LocalStats {
     fn sample(&self) -> NodeStats {
         // Lock config, clone out what we need, then drop the lock before any OS calls.
-        let (node_name, role, llama_dir, rpc_port) = {
+        let (node_name, role, llama_dir, rpc_port, advertise_gpu) = {
             let c = self.config.lock().unwrap();
-            (c.node_name.clone(), c.role, c.llama_dir.clone(), c.rpc_port)
+            (c.node_name.clone(), c.role, c.llama_dir.clone(), c.rpc_port, c.advertise_gpu)
         };
 
         let mut sys = sysinfo::System::new();
@@ -33,7 +33,9 @@ impl StatsProvider for LocalStats {
         let ram_total_mib = sys.total_memory() / (1024 * 1024);
         let ram_free_mib = real_free_ram_mib(sys.available_memory() / (1024 * 1024));
         let cpu_logical = num_cpus_logical();
-        let devices = gather_devices(ram_total_mib);
+        // A CPU-only worker (advertise_gpu = false) reports no GPU, so the planner won't
+        // route RPC GPU layers to a backend its rpc-server doesn't expose.
+        let devices = if advertise_gpu { gather_devices(ram_total_mib) } else { vec![] };
         NodeStats {
             name: node_name,
             role,

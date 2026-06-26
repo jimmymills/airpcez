@@ -14,6 +14,11 @@ pub struct Config {
     pub rpc_binary: Option<String>,
     pub rpc_device: Option<String>,
     pub node_name: String,
+    /// Whether this node advertises a GPU device in its stats. Default true.
+    /// Set false on a CPU-only worker (e.g. an Intel Mac whose rpc-server is built
+    /// CPU/Accelerate-only) so the planner doesn't route RPC GPU layers to a backend
+    /// that isn't there — and so a misread integrated-GPU VRAM line isn't reported.
+    pub advertise_gpu: bool,
     #[serde(default)]
     pub nodes: Vec<airpcez_core::cluster::NodeEntry>,
 }
@@ -31,6 +36,7 @@ impl Default for Config {
             rpc_device: None,
             node_name: sysinfo::System::host_name()
                 .unwrap_or_else(|| "airpcez-node".to_string()),
+            advertise_gpu: true,
             nodes: Vec::new(),
         }
     }
@@ -150,6 +156,14 @@ pub fn apply_cli_overrides(mut config: Config, args: &[String]) -> Config {
                     i += 1;
                 }
             }
+            "--advertise-gpu" => {
+                if let Some(v) = value {
+                    if let Ok(b) = v.parse::<bool>() {
+                        config.advertise_gpu = b;
+                        i += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -235,5 +249,18 @@ mod tests {
         let args: Vec<String> = ["--rpc-device", "CUDA0"].iter().map(|s| s.to_string()).collect();
         let c = apply_cli_overrides(Config::default(), &args);
         assert_eq!(c.rpc_device, Some("CUDA0".into()));
+    }
+
+    #[test]
+    fn advertise_gpu_defaults_true_and_toggles() {
+        // Default is true (GPU nodes unchanged); a toml omitting it stays true.
+        assert!(Config::default().advertise_gpu);
+        let c: Config = toml::from_str("node_name = \"intel-mbp\"").unwrap();
+        assert!(c.advertise_gpu, "omitted field must default to true, not false");
+        // A CPU-only worker turns it off explicitly (toml or CLI).
+        let c: Config = toml::from_str("advertise_gpu = false").unwrap();
+        assert!(!c.advertise_gpu);
+        let args: Vec<String> = ["--advertise-gpu", "false"].iter().map(|s| s.to_string()).collect();
+        assert!(!apply_cli_overrides(Config::default(), &args).advertise_gpu);
     }
 }
