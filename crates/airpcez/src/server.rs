@@ -46,6 +46,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/host/launch", post(host_launch))
         .route("/host/stop", post(host_stop))
         .route("/host/health", get(host_health))
+        .route("/host/logs", get(host_logs))
         .route("/catalog", get(catalog_handler))
         .route("/suggest", post(suggest_handler))
         .with_state(state);
@@ -208,6 +209,16 @@ async fn host_health(State(s): State<AppState>) -> Json<serde_json::Value> {
             "ready": false, "detail": "starting — llama-server not responding yet"
         })),
     }
+}
+
+/// The supervised process (llama-server / rpc-server) has its stdout+stderr captured
+/// into a rolling buffer. Expose it so launch failures are diagnosable from the cockpit
+/// instead of vanishing into a piped child process.
+async fn host_logs(State(s): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": format!("{:?}", s.supervisor.status()),
+        "lines": s.supervisor.recent_logs(),
+    }))
 }
 
 async fn catalog_handler() -> Json<Vec<crate::catalog::CatalogEntry>> {

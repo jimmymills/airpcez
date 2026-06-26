@@ -255,9 +255,11 @@
             <button class="btn-green" id="btn-launch">Launch</button>
             <button class="btn-default" id="btn-suggest">Suggest settings</button>
             <button class="btn-danger" id="btn-host-stop">Stop</button>
+            <button class="btn-default" id="btn-host-logs">Logs</button>
           </div>
           <div id="suggest-result"></div>
           <div id="launch-result"></div>
+          <pre id="host-logs" style="display:none; max-height:280px; overflow:auto; background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:8px; font-size:0.72rem; line-height:1.35; white-space:pre-wrap; margin-top:8px;"></pre>
         </div>
       </div>
 
@@ -677,6 +679,22 @@
       pollHealthOnce(openaiUrl, chatBase, resultEl);
       healthTimer = setInterval(() => pollHealthOnce(openaiUrl, chatBase, resultEl), 2500);
     }
+
+    document.getElementById("btn-host-logs").addEventListener("click", async () => {
+      const pre = document.getElementById("host-logs");
+      pre.style.display = "block";
+      pre.textContent = "fetching…";
+      try {
+        const d = await (await fetch("/host/logs")).json();
+        const lines = d.lines || [];
+        // textContent auto-escapes — safe to dump raw llama-server output.
+        pre.textContent = "[supervisor: " + (d.status || "?") + "]\n" +
+          (lines.length ? lines.join("\n") : "(no output captured yet)");
+        pre.scrollTop = pre.scrollHeight;
+      } catch (e) {
+        pre.textContent = "failed to fetch logs: " + e.message;
+      }
+    });
 
     document.getElementById("btn-launch").addEventListener("click", async () => {
       const resultEl = document.getElementById("launch-result");
