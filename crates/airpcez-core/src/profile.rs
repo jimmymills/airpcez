@@ -173,4 +173,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(ProfileStore::load(&path).profiles.len(), 0);
     }
+
+    #[test]
+    fn store_load_garbled_file_is_empty() {
+        let path = std::env::temp_dir().join("airpcez-profiletest-garbled.toml");
+        std::fs::write(&path, "this is not valid toml !!! [[[").unwrap();
+        assert_eq!(ProfileStore::load(&path).profiles.len(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
 }

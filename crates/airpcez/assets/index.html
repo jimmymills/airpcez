@@ -1009,25 +1009,32 @@
 
     document.getElementById("profiles-list").addEventListener("click", async (e) => {
       const t = e.target;
-      if (t.dataset.load) {
-        const p = await (await fetch(`/profiles/${encodeURIComponent(t.dataset.load)}/apply`, { method: "POST" })).json();
-        fillFormFromProfile(p);
-      } else if (t.dataset.launch) {
-        const resultEl = document.getElementById("launch-result");
-        resultEl.innerHTML = "<span class='status-info'>launching…</span>";
-        const resp = await fetch(`/profiles/${encodeURIComponent(t.dataset.launch)}/launch`, { method: "POST" });
-        if (resp.ok) {
-          const data = await resp.json();
-          const openaiUrl = data.openai_url || "";
-          const chatBase = openaiUrl.replace(/\/v1$/, "");
-          startHealthPolling(openaiUrl, chatBase, resultEl);
-          startLogsPolling();
-        } else {
-          resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + (await resp.text()).slice(0, 200) + "</span>";
+      try {
+        if (t.dataset.load) {
+          const r = await fetch(`/profiles/${encodeURIComponent(t.dataset.load)}/apply`, { method: "POST" });
+          if (!r.ok) throw new Error(`apply ${r.status} — ${(await r.text()).slice(0, 120)}`);
+          fillFormFromProfile(await r.json());
+        } else if (t.dataset.launch) {
+          const resultEl = document.getElementById("launch-result");
+          resultEl.innerHTML = "<span class='status-info'>launching…</span>";
+          const resp = await fetch(`/profiles/${encodeURIComponent(t.dataset.launch)}/launch`, { method: "POST" });
+          if (resp.ok) {
+            const data = await resp.json();
+            const openaiUrl = data.openai_url || "";
+            const chatBase = openaiUrl.replace(/\/v1$/, "");
+            startHealthPolling(openaiUrl, chatBase, resultEl);
+            startLogsPolling();
+          } else {
+            resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + (await resp.text()).slice(0, 200) + "</span>";
+          }
+        } else if (t.dataset.del) {
+          const r = await fetch("/profiles", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: t.dataset.del }) });
+          if (!r.ok) throw new Error(`delete ${r.status} — ${(await r.text()).slice(0, 120)}`);
+          loadProfiles();
         }
-      } else if (t.dataset.del) {
-        await fetch("/profiles", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: t.dataset.del }) });
-        loadProfiles();
+      } catch (err) {
+        document.getElementById("profiles-list").innerHTML =
+          "<span class='status-err'>✗ " + escapeHtml(err.message) + "</span>";
       }
     });
 
@@ -1056,9 +1063,19 @@
         tok_s: toks === "" ? null : parseFloat(toks),
         nodes,
       };
-      await fetch("/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      document.getElementById("profile-name").value = "";
-      loadProfiles();
+      try {
+        const resp = await fetch("/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        if (!resp.ok) {
+          document.getElementById("profiles-list").innerHTML =
+            "<span class='status-err'>✗ save " + resp.status + " — " + (await resp.text()).slice(0, 120) + "</span>";
+          return;
+        }
+        document.getElementById("profile-name").value = "";
+        loadProfiles();
+      } catch (err) {
+        document.getElementById("profiles-list").innerHTML =
+          "<span class='status-err'>✗ save failed — " + escapeHtml(err.message) + "</span>";
+      }
     });
 
     // ─── Settings panel ────────────────────────────────────────────────────────

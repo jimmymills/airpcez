@@ -24,6 +24,11 @@ async fn profiles_crud_roundtrip() {
         .json(&serde_json::json!({ "name": "Best Networked", "model": "repo:Q4_K_M", "ngl": 99 }))
         .send().await.unwrap().json().await.unwrap();
     assert!(saved.as_array().unwrap().iter().any(|p| p["id"] == "best-networked"));
+    assert!(
+        saved.as_array().unwrap().iter().find(|p| p["id"] == "best-networked").unwrap()
+            ["updated_at"].as_u64().unwrap() > 0,
+        "updated_at should be stamped on save"
+    );
 
     // GET filtered by model returns it; a different model filter does not
     let got: serde_json::Value = c.get("http://127.0.0.1:19301/profiles?model=repo:Q4_K_M")
@@ -32,6 +37,11 @@ async fn profiles_crud_roundtrip() {
     let none: serde_json::Value = c.get("http://127.0.0.1:19301/profiles?model=other")
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(none.as_array().unwrap().len(), 0);
+
+    // Unfiltered GET returns all (at least our profile)
+    let all: serde_json::Value = c.get("http://127.0.0.1:19301/profiles")
+        .send().await.unwrap().json().await.unwrap();
+    assert!(all.as_array().unwrap().iter().any(|p| p["id"] == "best-networked"));
 
     // DELETE removes it
     let after: serde_json::Value = c.request(reqwest::Method::DELETE, "http://127.0.0.1:19301/profiles")

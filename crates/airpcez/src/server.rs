@@ -1,4 +1,4 @@
-use airpcez_core::{cluster::NodeEntry, process::ProcessBackend, stats::StatsProvider};
+use airpcez_core::{cluster::NodeEntry, process::ProcessBackend, profile::{slugify, Profile, ProfileStore}, stats::StatsProvider};
 use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
@@ -354,8 +354,6 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-use airpcez_core::profile::{slugify, Profile, ProfileStore};
-
 #[derive(serde::Deserialize)]
 struct ProfilesQuery {
     model: Option<String>,
@@ -387,11 +385,13 @@ struct ProfileIdBody {
     id: String,
 }
 
-async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody>) -> Json<Vec<Profile>> {
+async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody>) -> impl IntoResponse {
     let mut store = ProfileStore::load(&s.profiles_path());
     store.remove(&req.id);
-    let _ = store.save(&s.profiles_path());
-    Json(store.profiles)
+    match store.save(&s.profiles_path()) {
+        Ok(()) => Json(store.profiles).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
 }
 
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
@@ -457,7 +457,8 @@ async fn launch_profile(State(s): State<AppState>, AxPath(id): AxPath<String>) -
         Ok(m) => m,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    let nodes = { s.config.lock().unwrap().nodes.clone() };
+    // We just set config.nodes = p.nodes above; use the profile's nodes directly.
+    let nodes = p.nodes.clone();
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     let eps: Vec<String> = cluster.nodes.iter()
         .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
@@ -648,6 +649,7 @@ mod tests {
         assert_eq!(req.cpu_moe.as_deref(), Some("16"));
         assert_eq!(req.no_mmap, Some(true));
         assert_eq!(req.flash_attn.as_deref(), Some("on"));
+        assert_eq!(req.ctx, Some(8192));
 
         // A .gguf path maps to model_path, not model_hf
         let mut q = airpcez_core::profile::Profile { name: "y".into(), model: "/mnt/m.gguf".into(), ..Default::default() };
@@ -655,5 +657,6 @@ mod tests {
         let r2 = super::launch_request_from_profile(&q);
         assert!(r2.model_hf.is_none());
         assert_eq!(r2.model_path.as_deref(), Some("/mnt/m.gguf"));
+        assert_eq!(r2.ctx, Some(4096));
     }
 }
