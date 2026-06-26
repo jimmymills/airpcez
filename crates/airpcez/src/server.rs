@@ -119,8 +119,23 @@ async fn worker_stop_handler(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, axum::Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
 }
 
+/// The default airpcez UI port; a worker node is polled at `http://<addr>/stats`.
+const DEFAULT_UI_PORT: u16 = 8675;
+
+/// Append the default UI port to a bare host/IP so it's pollable. "192.168.0.83" ->
+/// "192.168.0.83:8675"; an addr that already carries a `:port` is left as typed.
+fn normalize_node_addr(addr: &str) -> String {
+    let addr = addr.trim();
+    if addr.contains(':') {
+        addr.to_string()
+    } else {
+        format!("{addr}:{DEFAULT_UI_PORT}")
+    }
+}
+
 async fn add_node(State(s): State<AppState>, Json(entry): Json<NodeEntry>)
     -> Json<Vec<NodeEntry>> {
+    let entry = NodeEntry { name: entry.name, addr: normalize_node_addr(&entry.addr) };
     let mut g = s.nodes.lock().unwrap();
     if !g.iter().any(|n| n.addr == entry.addr) {
         g.push(entry);
@@ -135,8 +150,9 @@ struct RemoveNode {
 
 async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
     -> Json<Vec<NodeEntry>> {
+    let addr = normalize_node_addr(&req.addr);
     let mut g = s.nodes.lock().unwrap();
-    g.retain(|n| n.addr != req.addr);
+    g.retain(|n| n.addr != addr);
     Json(g.clone())
 }
 
@@ -366,6 +382,13 @@ mod tests {
     #[test]
     fn hf_repo_maps_to_cache_dirname() {
         assert_eq!(hf_cache_dirname("unsloth/Qwen3.6-35B-A3B-GGUF"), "models--unsloth--Qwen3.6-35B-A3B-GGUF");
+    }
+    #[test]
+    fn normalize_node_addr_appends_default_port() {
+        assert_eq!(super::normalize_node_addr("192.168.0.83"), "192.168.0.83:8675");
+        assert_eq!(super::normalize_node_addr("  192.168.0.83 "), "192.168.0.83:8675"); // trims
+        assert_eq!(super::normalize_node_addr("192.168.0.83:9000"), "192.168.0.83:9000"); // keeps port
+        assert_eq!(super::normalize_node_addr("worker.local"), "worker.local:8675");
     }
     #[test]
     fn resolve_hf_in_cache_finds_local_gguf_by_quant() {
