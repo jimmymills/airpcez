@@ -16,7 +16,10 @@ async fn main() {
     // Config is loaded from ./airpcez.toml (next to the binary / cwd).
     // If the file is absent or unparseable the compiled-in defaults are used.
     let config_path = Path::new("airpcez.toml");
-    let mut loaded = Config::load(config_path);
+    let mut loaded = airpcez::config::apply_cli_overrides(
+        Config::load(config_path),
+        &std::env::args().collect::<Vec<_>>(),
+    );
     if worker_mode {
         loaded.role = Role::Worker;
     }

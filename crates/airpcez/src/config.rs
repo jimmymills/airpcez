@@ -64,6 +64,76 @@ impl Config {
     }
 }
 
+/// Apply `--<flag> <value>` pairs from `args` onto `config`, returning the mutated config.
+/// Unknown flags and flags whose value is missing or unparseable are silently ignored.
+pub fn apply_cli_overrides(mut config: Config, args: &[String]) -> Config {
+    let mut i = 0;
+    while i < args.len() {
+        let flag = &args[i];
+        // Grab the value token that follows, if present.
+        let value = if i + 1 < args.len() { Some(args[i + 1].as_str()) } else { None };
+        match flag.as_str() {
+            "--ui-port" => {
+                if let Some(v) = value {
+                    if let Ok(p) = v.parse::<u16>() {
+                        config.ui_port = p;
+                        i += 1;
+                    }
+                }
+            }
+            "--rpc-port" => {
+                if let Some(v) = value {
+                    if let Ok(p) = v.parse::<u16>() {
+                        config.rpc_port = p;
+                        i += 1;
+                    }
+                }
+            }
+            "--llama-port" => {
+                if let Some(v) = value {
+                    if let Ok(p) = v.parse::<u16>() {
+                        config.llama_port = p;
+                        i += 1;
+                    }
+                }
+            }
+            "--role" => {
+                if let Some(v) = value {
+                    config.role = if v == "host" { Role::Host } else { Role::Worker };
+                    i += 1;
+                }
+            }
+            "--llama-dir" => {
+                if let Some(v) = value {
+                    config.llama_dir = Some(v.to_string());
+                    i += 1;
+                }
+            }
+            "--hf-cache-dir" => {
+                if let Some(v) = value {
+                    config.hf_cache_dir = Some(v.to_string());
+                    i += 1;
+                }
+            }
+            "--rpc-binary" => {
+                if let Some(v) = value {
+                    config.rpc_binary = Some(v.to_string());
+                    i += 1;
+                }
+            }
+            "--node-name" => {
+                if let Some(v) = value {
+                    config.node_name = v.to_string();
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    config
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +158,33 @@ mod tests {
         assert_eq!(c.ui_port, 8675); // defaulted
         assert_eq!(c.rpc_port, 50052); // defaulted
         assert!(matches!(c.role, Role::Worker)); // defaulted
+    }
+
+    #[test]
+    fn apply_cli_overrides_sets_known_fields() {
+        let args: Vec<String> = ["--role", "host", "--ui-port", "9000", "--llama-dir", "/x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let c = apply_cli_overrides(Config::default(), &args);
+        assert_eq!(c.role, Role::Host);
+        assert_eq!(c.ui_port, 9000);
+        assert_eq!(c.llama_dir, Some("/x".into()));
+    }
+
+    #[test]
+    fn apply_cli_overrides_invalid_port_leaves_default() {
+        let args: Vec<String> = ["--ui-port", "abc"].iter().map(|s| s.to_string()).collect();
+        let c = apply_cli_overrides(Config::default(), &args);
+        assert_eq!(c.ui_port, 8675); // default unchanged
+    }
+
+    #[test]
+    fn apply_cli_overrides_trailing_flag_no_panic() {
+        // --node-name at the end with no following value must not panic.
+        let args: Vec<String> = ["--node-name"].iter().map(|s| s.to_string()).collect();
+        let c = apply_cli_overrides(Config::default(), &args);
+        // node_name stays as whatever the default hostname is — just assert no panic
+        let _ = c.node_name;
     }
 }
