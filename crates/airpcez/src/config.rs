@@ -60,6 +60,11 @@ impl Config {
         if let Some(d) = &self.rpc_device {
             return Some(d.clone());
         }
+        // A CPU-only worker advertises no GPU; serve its RAM-backed CPU device over RPC
+        // (rpc-server otherwise prefers a 0-MiB BLAS accelerator the host can't offload to).
+        if !self.advertise_gpu {
+            return Some("CPU".to_string());
+        }
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             Some("MTL0".to_string())
         } else {
@@ -262,5 +267,18 @@ mod tests {
         assert!(!c.advertise_gpu);
         let args: Vec<String> = ["--advertise-gpu", "false"].iter().map(|s| s.to_string()).collect();
         assert!(!apply_cli_overrides(Config::default(), &args).advertise_gpu);
+    }
+
+    #[test]
+    fn rpc_device_filter_cpu_only_worker_serves_cpu() {
+        // A CPU-only worker (advertise_gpu=false) must serve its RAM-backed CPU device,
+        // not the default 0-MiB BLAS accelerator the rpc-server would otherwise pick.
+        let mut c = Config::default();
+        c.advertise_gpu = false;
+        assert_eq!(c.rpc_device_filter(), Some("CPU".to_string()));
+
+        // Explicit rpc_device still wins over the advertise_gpu default.
+        c.rpc_device = Some("CUDA0".into());
+        assert_eq!(c.rpc_device_filter(), Some("CUDA0".to_string()));
     }
 }
