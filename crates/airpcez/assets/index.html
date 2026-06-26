@@ -651,6 +651,33 @@
     });
 
     // ─── Launch / Stop host ────────────────────────────────────────────────────
+    // ─── Host launch readiness (poll /host/health until the model is loaded) ───────
+    let healthTimer = null;
+    function stopHealthPolling() {
+      if (healthTimer) { clearInterval(healthTimer); healthTimer = null; }
+    }
+    function launchLinks(openaiUrl, chatBase) {
+      return "OpenAI URL: <a href='" + escapeHtml(openaiUrl) + "' target='_blank'>" + escapeHtml(openaiUrl) + "</a>" +
+        (chatBase ? " | <a href='" + escapeHtml(chatBase) + "' target='_blank'>chat UI</a>" : "");
+    }
+    async function pollHealthOnce(openaiUrl, chatBase, resultEl) {
+      try {
+        const h = await (await fetch("/host/health")).json();
+        if (h.ready) {
+          stopHealthPolling();
+          resultEl.innerHTML = "<span class='status-ok'>✓ model ready</span> — " + launchLinks(openaiUrl, chatBase);
+        } else {
+          resultEl.innerHTML = "<span class='status-info'>⏳ " + escapeHtml(h.detail || "loading model…") +
+            "</span> — " + launchLinks(openaiUrl, chatBase);
+        }
+      } catch (e) { /* transient fetch error — keep last state and retry next tick */ }
+    }
+    function startHealthPolling(openaiUrl, chatBase, resultEl) {
+      stopHealthPolling();
+      pollHealthOnce(openaiUrl, chatBase, resultEl);
+      healthTimer = setInterval(() => pollHealthOnce(openaiUrl, chatBase, resultEl), 2500);
+    }
+
     document.getElementById("btn-launch").addEventListener("click", async () => {
       const resultEl = document.getElementById("launch-result");
       resultEl.innerHTML = "<span class='status-info'>launching…</span>";
@@ -689,10 +716,9 @@
           const chatBase = openaiUrl.endsWith("/v1")
             ? openaiUrl.slice(0, -3)
             : openaiUrl.replace(/\/v1$/, "");
-          resultEl.innerHTML =
-            "<span class='status-ok'>✓ launched</span> — " +
-            "OpenAI URL: <a href='" + openaiUrl + "' target='_blank'>" + openaiUrl + "</a>" +
-            (chatBase ? " | <a href='" + chatBase + "' target='_blank'>chat UI</a>" : "");
+          // The process has spawned, but llama-server still loads the model (and
+          // distributes layers over RPC). Poll readiness rather than claim "launched".
+          startHealthPolling(openaiUrl, chatBase, resultEl);
         } else {
           const txt = await resp.text();
           resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + txt.slice(0, 200) + "</span>";
@@ -704,6 +730,7 @@
 
     document.getElementById("btn-host-stop").addEventListener("click", async () => {
       const resultEl = document.getElementById("launch-result");
+      stopHealthPolling();
       resultEl.innerHTML = "<span class='status-info'>stopping…</span>";
       try {
         const resp = await fetch("/host/stop", { method: "POST" });

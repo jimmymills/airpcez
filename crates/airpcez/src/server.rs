@@ -45,6 +45,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/nodes", post(add_node).delete(remove_node))
         .route("/host/launch", post(host_launch))
         .route("/host/stop", post(host_stop))
+        .route("/host/health", get(host_health))
         .route("/catalog", get(catalog_handler))
         .route("/suggest", post(suggest_handler))
         .with_state(state);
@@ -189,6 +190,24 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
 
 async fn host_stop(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "stopped": s.supervisor.stop() })))
+}
+
+/// Server-side readiness probe: a launched `llama-server` returns 200 on /health only
+/// once the model is loaded (503 while loading). The cockpit polls this (same-origin,
+/// no CORS) so it shows "loading… → ready" instead of a premature "launched".
+async fn host_health(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let url = format!("http://localhost:{}/health", s.llama_port);
+    match s.http.get(&url).timeout(Duration::from_secs(2)).send().await {
+        Ok(r) if r.status().is_success() => {
+            Json(serde_json::json!({ "ready": true, "detail": "model ready" }))
+        }
+        Ok(r) => Json(serde_json::json!({
+            "ready": false, "detail": format!("loading model (HTTP {})", r.status().as_u16())
+        })),
+        Err(_) => Json(serde_json::json!({
+            "ready": false, "detail": "starting — llama-server not responding yet"
+        })),
+    }
 }
 
 async fn catalog_handler() -> Json<Vec<crate::catalog::CatalogEntry>> {
