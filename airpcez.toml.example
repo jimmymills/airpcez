@@ -1,0 +1,23 @@
+# airpcez.toml — copy to `airpcez.toml` (gitignored) and edit, or set values from the
+# cockpit Settings menu / CLI flags. Any omitted field falls back to the default shown.
+
+ui_port    = 8675        # web cockpit port  (changing this needs a restart to rebind)
+rpc_port   = 50052       # rpc-server port this node binds / advertises
+llama_port = 8080        # llama-server (host role) OpenAI port
+
+role       = "worker"    # "worker" or "host"   (--worker forces worker + autostarts rpc-server)
+
+node_name  = "airpcez-node"   # defaults to the machine hostname
+
+# Optional paths
+# llama_dir    = "/path/to/llama.cpp/build/bin"   # dir holding llama-server / rpc-server
+# rpc_binary   = "/path/to/rpc-server"            # explicit rpc-server (else <llama_dir>/rpc-server)
+# hf_cache_dir = "/path/to/hf/cache"              # dir holding models--org--repo/  (so -hf loads locally)
+
+# Worker nodes the host polls (host role) — or add them from the cockpit.
+# [[nodes]]
+# name = "m2-pro"
+# addr = "192.168.0.181:8675"
+
+# Every field is also settable via CLI flags (--ui-port, --rpc-port, --llama-port, --role,
+# --llama-dir, --rpc-binary, --hf-cache-dir, --node-name) and the cockpit Settings menu.

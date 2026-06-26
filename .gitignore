@@ -2,3 +2,4 @@
 .superpowers/
 **/*.gguf
 .DS_Store
+/airpcez.toml
