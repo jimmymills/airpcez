@@ -53,7 +53,7 @@ the Metal backend; we add no inference logic.
 | Neural Engine | **Out** — no ggml ANE backend; architecturally unsuited to LLM decode |
 | Build approach | **A** — thin SwiftUI app + llama.cpp `xcframework`; reimplement the small `/stats` surface in Swift; golden contract test on the Rust side |
 | Memory unlock | **Paid dev account** + `increased-memory-limit` / `extended-virtual-addressing` entitlements |
-| Donation amount | **User-tunable budget slider**, single source of truth for both the RPC advertised free/total and `/stats` device VRAM |
+| Donation amount | **User-tunable budget slider**; governs placement via the `/stats` device VRAM (planner → `--tensor-split`). `b9789` RPC has no free/total param, so it self-reports device memory — budget is enforced in `/stats`, not at the RPC call |
 | Lifecycle | **Foreground + keep-awake + plugged in** |
 | Node add | **Manual** (type `ip:8675` into the cockpit) |
 | Version match | iPad `xcframework` pinned to the **host's llama.cpp tag** (`b9789` today) |
@@ -64,9 +64,11 @@ A SwiftUI app with two LAN listeners and one compute engine, all in-process:
 
 - **llama.cpp as an iOS `xcframework`** — ggml with the **Metal** and **RPC** backends,
   built from the **same release tag the host runs**.
-- **A C shim** that initializes the Metal backend and calls the RPC server entry
-  (`ggml_backend_rpc_start_server`, the same call `rpc-server`'s `main()` makes) on a
-  background thread. Bundles the compiled Metal `.metallib`.
+- **A C shim** that enumerates ggml devices, keeps the non-CPU (Metal) one, and calls the
+  RPC server entry (`ggml_backend_rpc_start_server(endpoint, cache_dir, n_threads,
+  n_devices, devices)` — the same call `rpc-server`'s `main()` makes at `b9789`) on a
+  background thread. Bundles the compiled Metal `.metallib`. (Static linking needs
+  `-all_load` so the Metal backend's self-registration isn't dead-stripped.)
 - **A tiny Swift HTTP server** answering `GET /stats` with a `NodeStats`-shaped JSON
   payload on the airpcez port (`8675`).
 - **A minimal status UI** — donation-budget slider, the LAN `ip:port` to copy into the
@@ -105,11 +107,14 @@ working set):
 ### HTTP `/stats` server (Swift)
 Serves the above JSON on `:8675`. That is the entire host-facing HTTP surface.
 
-### Donation budget — single source of truth
-One configurable number feeds **both** the RPC server's advertised free/total **and** the
-`/stats` device VRAM, so the planner never over- or under-places. Default ≈ **80% of
-startup `os_proc_available_memory()`**, leaving headroom for KV/compute/command buffers
-and the OS. Exposed as a slider for empirical tuning (start conservative, push up).
+### Donation budget — governs placement via `/stats`
+One configurable number sets the `/stats` device `vram_total_mib`, which the host planner
+turns into `--tensor-split` — so the budget controls how many layers land on the iPad.
+At `b9789` the RPC server has no free/total parameter (it self-reports the Metal device's
+memory), so the budget cannot be capped at the RPC layer; we therefore report a
+**conservative** budget in `/stats` so the planner under-fills against jetsam. Default ≈
+**80% of startup `os_proc_available_memory()`**, leaving headroom for KV/compute/command
+buffers and the OS. Exposed as a slider for empirical tuning (start conservative, push up).
 
 ## Data flow
 

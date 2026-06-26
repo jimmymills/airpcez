@@ -13,7 +13,7 @@
 - **Goal is capacity, not speed.** RPC is latency-bound; WiFi is slower than the gigabit LAN. The iPad lets a bigger model *fit*; it does not make tokens faster.
 - **No `airpcez-core` semantic changes.** The iPad conforms to the existing wire contract; it does not require Rust-side schema edits beyond an additive test fixture.
 - **Version pin:** the iPad `xcframework` is built from the **same llama.cpp tag the host runs** (`b9789` today). The reported `binary_version` MUST equal the host's (format `"b<N>"`, e.g. `"b9789"`).
-- **Donation budget is the single source of truth:** one MiB value feeds BOTH the RPC server's advertised `free_mem`/`total_mem` AND the `/stats` device `vram_total_mib`. They must never diverge.
+- **Donation budget governs placement via `/stats`:** one MiB value sets the `/stats` device `vram_total_mib`, which the host planner turns into `--tensor-split` — so the budget controls how many layers land on the iPad. Note: llama.cpp `b9789`'s `ggml_backend_rpc_start_server` has **no** `free_mem`/`total_mem` params (the RPC server self-reports the Metal device's memory), so the budget cannot be enforced at the RPC layer — report a *conservative* budget in `/stats` so the planner under-fills against jetsam.
 - **Ports:** `/stats` HTTP on `8675`; llama.cpp RPC on `50052` (mirrors the cluster defaults).
 - **`/stats` shape (verbatim from `airpcez_core::model::NodeStats`):** `name: String`, `role: "worker"`, `ram_total_mib: u64`, `ram_free_mib: u64`, `cpu_logical: u32`, `devices: [DeviceStats]`, `rpc_endpoint: "0.0.0.0:50052"` (host rewrites the IP), `binary_version: "b<N>"`, `running: bool`, `sampled_at_unix: u64`. `DeviceStats` = `name: String`, `kind: "metal"`, `vram_total_mib: u64`, `vram_free_mib: u64`, `reliable: bool`. All keys are snake_case; enums serialize lowercase.
 - **Lifecycle:** foreground + keep-awake (idle timer disabled), device plugged in. No background serving.
@@ -146,13 +146,13 @@ git commit -m "build(ipad): llama.cpp iOS xcframework build script (Metal+RPC, v
   - `int rpc_shim_start(const char *endpoint, unsigned long long free_bytes, unsigned long long total_bytes);` — inits the Metal backend and starts the RPC server; **blocks** (call on a background thread). Returns non-zero on init failure.
   - `int rpc_shim_is_metal_available(void);` — 1 if a Metal device/backend initialised.
 
-- [ ] **Step 1: Confirm the upstream API at the pinned tag**
+- [ ] **Step 1: Upstream API (confirmed against tag `b9789`)**
 
-Read, in the cloned `.llama-ios-build/llama.cpp`:
-- `ggml/include/ggml-rpc.h` — confirm the exact `ggml_backend_rpc_start_server(...)` signature (recent tags: `(ggml_backend_t backend, const char *endpoint, const char *cache_dir, size_t free_mem, size_t total_mem)`).
-- `tools/rpc/rpc-server.cpp` — confirm how it obtains the backend (recent tags use the device registry: find the `"Metal"` backend reg, get device 0, `ggml_backend_dev_init`).
+Verified from `ggml/include/ggml-rpc.h` and `tools/rpc/rpc-server.cpp` at `b9789`:
+- Server entry: `void ggml_backend_rpc_start_server(const char *endpoint, const char *cache_dir, size_t n_threads, size_t n_devices, ggml_backend_dev_t *devices);` — **no** `free_mem`/`total_mem` params; the server self-reports each device's memory.
+- Device selection (from `rpc-server.cpp`'s `get_devices()`): enumerate `ggml_backend_dev_get(i)` for `i < ggml_backend_dev_count()`, keep devices whose `ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU` (Metal on iPad); fall back to CPU only if none.
 
-Mirror those two facts in the shim below; if the signature differs at this tag, adapt the call to match.
+If you re-clone at a *different* tag, re-confirm this signature in `ggml-rpc.h` and adapt — the API has changed across releases.
 
 - [ ] **Step 2: Write the shim header**
 
@@ -165,9 +165,12 @@ Create `ios/AirpcezWorker/Sources/RpcShim/include/rpc_shim.h`:
 extern "C" {
 #endif
 
-// Inits the Metal backend and starts the llama.cpp RPC server on `endpoint`
-// (e.g. "0.0.0.0:50052"), advertising free/total memory to the host. BLOCKS
-// until the server stops — call from a background thread. Non-zero = init failed.
+// Starts the llama.cpp RPC server on `endpoint` (e.g. "0.0.0.0:50052"),
+// serving the device's non-CPU (Metal) backend. BLOCKS until the server stops
+// — call from a background thread. Non-zero = no servable device / init failed.
+// free_bytes/total_bytes are advisory only: b9789's start_server has no memory
+// params (the server self-reports device memory); kept for forward-compat and
+// currently unused. The donation budget is enforced via /stats, not here.
 int rpc_shim_start(const char *endpoint,
                    unsigned long long free_bytes,
                    unsigned long long total_bytes);
@@ -190,37 +193,57 @@ Create `ios/AirpcezWorker/Sources/RpcShim/rpc_shim.c`:
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-rpc.h"
-#include <string.h>
 
-// Find and initialise the Metal backend device via the registry (matches
-// tools/rpc/rpc-server.cpp on recent tags). Returns NULL if unavailable.
-static ggml_backend_t init_metal_backend(void) {
-    ggml_backend_reg_t reg = ggml_backend_reg_by_name("Metal");
-    if (!reg) return NULL;
-    if (ggml_backend_reg_dev_count(reg) == 0) return NULL;
-    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, 0);
-    return ggml_backend_dev_init(dev, NULL);
+// Collect the non-CPU (Metal on iPad) devices to serve, mirroring
+// rpc-server.cpp's get_devices(): keep accelerators; fall back to CPU only if
+// none. Writes up to `cap` devices into `out`, returns how many.
+static size_t collect_devices(ggml_backend_dev_t *out, size_t cap) {
+    size_t n = 0;
+    for (size_t i = 0; i < ggml_backend_dev_count() && n < cap; i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            out[n++] = dev;
+        }
+    }
+    if (n == 0) {  // no accelerator — fall back to CPU device(s)
+        for (size_t i = 0; i < ggml_backend_dev_count() && n < cap; i++) {
+            out[n++] = ggml_backend_dev_get(i);
+        }
+    }
+    return n;
 }
 
 int rpc_shim_is_metal_available(void) {
-    ggml_backend_t b = init_metal_backend();
-    if (!b) return 0;
-    ggml_backend_free(b);
-    return 1;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        if (ggml_backend_dev_type(ggml_backend_dev_get(i)) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int rpc_shim_start(const char *endpoint,
                    unsigned long long free_bytes,
                    unsigned long long total_bytes) {
-    ggml_backend_t backend = init_metal_backend();
-    if (!backend) return 1;
-    // cache_dir = NULL (no on-device tensor cache for v1). Blocks here.
-    ggml_backend_rpc_start_server(backend, endpoint, NULL,
-                                  (size_t)free_bytes, (size_t)total_bytes);
-    ggml_backend_free(backend);
+    (void)free_bytes;            // b9789 self-reports device memory; budget is
+    (void)total_bytes;           // enforced via /stats, not here. See header.
+    ggml_backend_dev_t devices[8];
+    size_t n = collect_devices(devices, 8);
+    if (n == 0) return 1;        // nothing to serve
+    // n_threads = 0 -> ggml picks a default. cache_dir = NULL (no tensor cache
+    // in v1). BLOCKS here until the server stops.
+    ggml_backend_rpc_start_server(endpoint, NULL, /*n_threads=*/0, n, devices);
     return 0;
 }
 ```
+
+> **Static-linking gotcha (read before M1 build):** with `BUILD_SHARED_LIBS=OFF`,
+> the Metal backend registers itself via a static constructor whose object file
+> the linker can dead-strip (nothing references it directly), making
+> `ggml_backend_dev_count()` return only CPU / zero. Task 3 sets `-all_load` (or
+> `-force_load` on `libllama_full.a`) in the app target's **Other Linker Flags**
+> to keep the backend registrars. If Metal "isn't found" on-device, this flag is
+> the first thing to check.
 
 - [ ] **Step 4: Write the module map so Swift can import it**
 
@@ -259,6 +282,7 @@ In Xcode (matching iPadOS 27 Beta 2 — see Development Environment in the spec)
 - Add the `Sources/RpcShim` folder; set the target's **Import Paths**/header search to `Sources/RpcShim/include` and add the module map (Build Settings → Swift Compiler → Import Paths, or add `Sources/RpcShim/include` to the bridging/module search path).
 - Add `Generated/LlamaVersion.swift` to the target.
 - Link required system frameworks: `Metal`, `MetalKit`, `Accelerate`, `Foundation`.
+- **Build Settings → Other Linker Flags: add `-all_load`** (or `-force_load "$(SRCROOT)/Frameworks/.../libllama_full.a"`). Without this, the statically-linked Metal backend's self-registration is dead-stripped and `ggml_backend_dev_count()` sees no Metal device — the #1 silent M1 failure.
 
 - [ ] **Step 2: Write the RPC server wrapper**
 
