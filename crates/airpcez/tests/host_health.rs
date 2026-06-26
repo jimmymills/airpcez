@@ -11,8 +11,8 @@ async fn host_health_reports_not_ready_without_llama_server() {
         cpu_logical: 1, devices: vec![], rpc_endpoint: None, binary_version: None,
         running: false, sampled_at_unix: 0,
     };
-    let mut state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats }));
-    state.llama_port = 1; // nothing is listening here → connection refused
+    let state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats }));
+    state.config.lock().unwrap().llama_port = 1; // nothing is listening here → connection refused
     tokio::spawn(airpcez::server::run_server(19305, state));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 

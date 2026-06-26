@@ -15,11 +15,10 @@ use std::{sync::Arc, time::Duration};
 pub struct AppState {
     pub provider: Arc<dyn StatsProvider>,
     pub supervisor: Arc<dyn ProcessBackend>,
-    pub nodes: Arc<std::sync::Mutex<Vec<NodeEntry>>>,
+    pub config: Arc<std::sync::Mutex<crate::config::Config>>,
     pub http: reqwest::Client,
-    pub llama_dir: Option<String>,
-    pub llama_port: u16,
-    pub hf_cache_dir: Option<String>,
+    pub config_path: std::path::PathBuf,
+    pub bound_ui_port: u16,
 }
 
 impl AppState {
@@ -27,11 +26,10 @@ impl AppState {
         AppState {
             provider,
             supervisor: Arc::new(crate::supervisor::TokioSupervisor::new()),
-            nodes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            config: Arc::new(std::sync::Mutex::new(crate::config::Config::default())),
             http: reqwest::Client::new(),
-            llama_dir: None,
-            llama_port: 8080,
-            hf_cache_dir: None,
+            config_path: std::env::temp_dir().join("airpcez-test-config.toml"),
+            bound_ui_port: 8675,
         }
     }
 }
@@ -85,7 +83,7 @@ async fn cluster_handler(State(s): State<AppState>) -> Json<airpcez_core::cluste
         entry: NodeEntry { name: self_stats.name.clone(), addr: "self".into() },
         stats: Some(self_stats), reachable: true, error: None,
     };
-    let nodes = { s.nodes.lock().unwrap().clone() };
+    let nodes = { s.config.lock().unwrap().nodes.clone() };
     let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     cluster.warnings = version_warnings(self_version.as_deref(), &cluster.nodes);
     cluster.nodes.insert(0, self_snap);
@@ -136,11 +134,11 @@ fn normalize_node_addr(addr: &str) -> String {
 async fn add_node(State(s): State<AppState>, Json(entry): Json<NodeEntry>)
     -> Json<Vec<NodeEntry>> {
     let entry = NodeEntry { name: entry.name, addr: normalize_node_addr(&entry.addr) };
-    let mut g = s.nodes.lock().unwrap();
-    if !g.iter().any(|n| n.addr == entry.addr) {
-        g.push(entry);
+    let mut g = s.config.lock().unwrap();
+    if !g.nodes.iter().any(|n| n.addr == entry.addr) {
+        g.nodes.push(entry);
     }
-    Json(g.clone())
+    Json(g.nodes.clone())
 }
 
 #[derive(serde::Deserialize)]
@@ -151,9 +149,9 @@ struct RemoveNode {
 async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
     -> Json<Vec<NodeEntry>> {
     let addr = normalize_node_addr(&req.addr);
-    let mut g = s.nodes.lock().unwrap();
-    g.retain(|n| n.addr != addr);
-    Json(g.clone())
+    let mut g = s.config.lock().unwrap();
+    g.nodes.retain(|n| n.addr != addr);
+    Json(g.nodes.clone())
 }
 
 async fn serve_index() -> axum::response::Html<&'static str> {
@@ -249,9 +247,14 @@ fn resolve_hf_in_cache(cache_dir: &str, hf: &str) -> Option<String> {
 
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
     use airpcez_core::flags::*;
+    // Extract config values before any await — never hold the Mutex across an await.
+    let (llama_dir, llama_port, hf_cache_dir_cfg) = {
+        let c = s.config.lock().unwrap();
+        (c.llama_dir.clone(), c.llama_port, c.hf_cache_dir.clone())
+    };
     // Effective HF cache dir: per-launch field overrides the host config default.
     let cache_dir = req.hf_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
-        .or(s.hf_cache_dir.as_deref());
+        .or(hf_cache_dir_cfg.as_deref());
     let model = match (req.model_hf, req.model_path) {
         (Some(hf), _) if !hf.trim().is_empty() => {
             let hf = hf.trim();
@@ -272,12 +275,12 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
         Some("off") | None => CpuMoe::Off,
         Some(n) => match n.parse::<u32>() { Ok(v) => CpuMoe::NLayers(v), Err(_) => CpuMoe::Off },
     };
-    let nodes = { s.nodes.lock().unwrap().clone() };
+    let nodes = { s.config.lock().unwrap().nodes.clone() };
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     let eps: Vec<String> = cluster.nodes.iter()
         .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
         .collect();
-    let binary = match &s.llama_dir {
+    let binary = match &llama_dir {
         Some(d) => format!("{d}/llama-server"),
         None => "llama-server".to_string(),
     };
@@ -285,11 +288,11 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
         binary: &binary, model: &model, rpc_endpoints: &eps,
         ngl: req.ngl, tensor_split: req.tensor_split.as_deref(), main_gpu: req.main_gpu,
         device: req.device.as_deref(), cpu_moe: &cpu_moe, ctx: req.ctx,
-        host: "0.0.0.0", port: s.llama_port,
+        host: "0.0.0.0", port: llama_port,
     };
     match s.supervisor.start(llama_server_spec(&opts)) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({
-            "openai_url": format!("http://localhost:{}/v1", s.llama_port)
+            "openai_url": format!("http://localhost:{}/v1", llama_port)
         }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e}))).into_response(),
     }
@@ -303,7 +306,8 @@ async fn host_stop(State(s): State<AppState>) -> impl IntoResponse {
 /// once the model is loaded (503 while loading). The cockpit polls this (same-origin,
 /// no CORS) so it shows "loading… → ready" instead of a premature "launched".
 async fn host_health(State(s): State<AppState>) -> Json<serde_json::Value> {
-    let url = format!("http://localhost:{}/health", s.llama_port);
+    let llama_port = s.config.lock().unwrap().llama_port;
+    let url = format!("http://localhost:{}/health", llama_port);
     match s.http.get(&url).timeout(Duration::from_secs(2)).send().await {
         Ok(r) if r.status().is_success() => {
             Json(serde_json::json!({ "ready": true, "detail": "model ready" }))
@@ -343,7 +347,7 @@ async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestReque
         entry: NodeEntry { name: self_stats.name.clone(), addr: "self".into() },
         stats: Some(self_stats), reachable: true, error: None,
     };
-    let nodes = { s.nodes.lock().unwrap().clone() };
+    let nodes = { s.config.lock().unwrap().nodes.clone() };
     let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     let warnings = airpcez_core::cluster::version_warnings(self_version.as_deref(), &cluster.nodes);
     cluster.nodes.insert(0, self_snap);

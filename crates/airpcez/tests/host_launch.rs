@@ -6,8 +6,8 @@ use std::sync::Arc;
 async fn host_launch_returns_openai_url() {
     let stats = NodeStats { name: "h".into(), role: Role::Host, ram_total_mib: 1, ram_free_mib: 1,
         cpu_logical: 1, devices: vec![], rpc_endpoint: None, binary_version: None, running: false, sampled_at_unix: 0 };
-    let mut state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats }));
-    state.llama_dir = Some("/bin".into()); // /bin/llama-server won't exist -> override below
+    let state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats }));
+    state.config.lock().unwrap().llama_dir = Some("/bin".into()); // /bin/llama-server won't exist -> override below
     tokio::spawn(airpcez::server::run_server(19104, state));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // Use a model_hf and rely on the supervisor accepting the spawn attempt; we assert the URL shape.

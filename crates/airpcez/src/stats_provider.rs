@@ -1,9 +1,10 @@
 use airpcez_core::model::*;
 use airpcez_core::stats::StatsProvider;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct LocalStats { pub name: String, pub role: Role, pub llama_dir: Option<String>, pub rpc_port: u16 }
+pub struct LocalStats { pub config: Arc<Mutex<crate::config::Config>> }
 
 #[cfg(target_os = "macos")]
 fn real_free_ram_mib(fallback_mib: u64) -> u64 {
@@ -21,6 +22,12 @@ fn real_free_ram_mib(fallback_mib: u64) -> u64 { fallback_mib }
 
 impl StatsProvider for LocalStats {
     fn sample(&self) -> NodeStats {
+        // Lock config, clone out what we need, then drop the lock before any OS calls.
+        let (node_name, role, llama_dir, rpc_port) = {
+            let c = self.config.lock().unwrap();
+            (c.node_name.clone(), c.role, c.llama_dir.clone(), c.rpc_port)
+        };
+
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         let ram_total_mib = sys.total_memory() / (1024 * 1024);
@@ -28,14 +35,14 @@ impl StatsProvider for LocalStats {
         let cpu_logical = num_cpus_logical();
         let devices = gather_devices(ram_total_mib);
         NodeStats {
-            name: self.name.clone(),
-            role: self.role,
+            name: node_name,
+            role,
             ram_total_mib,
             ram_free_mib,
             cpu_logical,
             devices,
-            rpc_endpoint: Some(format!("0.0.0.0:{}", self.rpc_port)),
-            binary_version: crate::version::detect_binary_version(self.llama_dir.as_deref()),
+            rpc_endpoint: Some(format!("0.0.0.0:{}", rpc_port)),
+            binary_version: crate::version::detect_binary_version(llama_dir.as_deref()),
             running: false,
             sampled_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         }

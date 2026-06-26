@@ -16,35 +16,32 @@ async fn main() {
     // Config is loaded from ./airpcez.toml (next to the binary / cwd).
     // If the file is absent or unparseable the compiled-in defaults are used.
     let config_path = Path::new("airpcez.toml");
-    let mut config = Config::load(config_path);
+    let mut loaded = Config::load(config_path);
     if worker_mode {
-        config.role = Role::Worker;
+        loaded.role = Role::Worker;
     }
 
-    let provider = Arc::new(LocalStats {
-        name: config.node_name.clone(),
-        role: config.role,
-        llama_dir: config.llama_dir.clone(),
-        rpc_port: config.rpc_port,
-    });
+    let bound_ui_port = loaded.ui_port;
+    let rpc_port = loaded.rpc_port;
+    let rpc_bin = loaded.rpc_binary_path();
+    let config = Arc::new(Mutex::new(loaded));
+    let provider = Arc::new(LocalStats { config: config.clone() });
     let supervisor: Arc<dyn ProcessBackend> = Arc::new(TokioSupervisor::new());
     let state = AppState {
         provider,
         supervisor: supervisor.clone(),
-        nodes: Arc::new(Mutex::new(config.nodes.clone())),
+        config: config.clone(),
         http: reqwest::Client::new(),
-        llama_dir: config.llama_dir.clone(),
-        llama_port: config.llama_port,
-        hf_cache_dir: config.hf_cache_dir.clone(),
+        config_path: config_path.to_path_buf(),
+        bound_ui_port,
     };
 
     if worker_mode {
-        let bin = config.rpc_binary_path();
-        let spec = airpcez_core::flags::rpc_server_spec(&bin, "0.0.0.0", config.rpc_port, None);
+        let spec = airpcez_core::flags::rpc_server_spec(&rpc_bin, "0.0.0.0", rpc_port, None);
         match supervisor.start(spec) {
-            Ok(()) => eprintln!("[airpcez] --worker: started rpc-server `{bin}` on 0.0.0.0:{}", config.rpc_port),
+            Ok(()) => eprintln!("[airpcez] --worker: started rpc-server `{rpc_bin}` on 0.0.0.0:{rpc_port}"),
             Err(e) => {
-                eprintln!("[airpcez] --worker: FAILED to start rpc-server `{bin}`: {e}");
+                eprintln!("[airpcez] --worker: FAILED to start rpc-server `{rpc_bin}`: {e}");
                 eprintln!("[airpcez]   set `rpc_binary = \"/abs/path/to/rpc-server\"` (or `llama_dir`) in ./airpcez.toml, run from that dir");
             }
         }
@@ -52,8 +49,8 @@ async fn main() {
 
     eprintln!(
         "[airpcez] listening on http://0.0.0.0:{}{}",
-        config.ui_port,
+        bound_ui_port,
         if worker_mode { "  (worker: rpc-server autostarted)" } else { "" }
     );
-    airpcez::server::run_server(config.ui_port, state).await;
+    airpcez::server::run_server(bound_ui_port, state).await;
 }
