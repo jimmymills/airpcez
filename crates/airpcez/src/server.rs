@@ -307,7 +307,7 @@ async fn host_stop(State(s): State<AppState>) -> impl IntoResponse {
 /// once the model is loaded (503 while loading). The cockpit polls this (same-origin,
 /// no CORS) so it shows "loading… → ready" instead of a premature "launched".
 async fn host_health(State(s): State<AppState>) -> Json<serde_json::Value> {
-    let llama_port = s.config.lock().unwrap().llama_port;
+    let llama_port = { s.config.lock().unwrap().llama_port };
     let url = format!("http://localhost:{}/health", llama_port);
     match s.http.get(&url).timeout(Duration::from_secs(2)).send().await {
         Ok(r) if r.status().is_success() => {
@@ -361,9 +361,17 @@ async fn get_config(State(s): State<AppState>) -> Json<crate::config::Config> {
     Json(s.config.lock().unwrap().clone())
 }
 
-async fn post_config(State(s): State<AppState>, Json(new): Json<crate::config::Config>) -> impl IntoResponse {
+async fn post_config(State(s): State<AppState>, Json(mut new): Json<crate::config::Config>) -> impl IntoResponse {
     let restart_required = new.ui_port != s.bound_ui_port;
-    let save = { let mut c = s.config.lock().unwrap(); *c = new; c.save(&s.config_path) };
+    let save = {
+        let mut c = s.config.lock().unwrap();
+        new.nodes = c.nodes.clone(); // nodes are managed only via /nodes — never clobbered by a settings save
+        if new.node_name.trim().is_empty() {
+            new.node_name = c.node_name.clone(); // don't let a blank settings field wipe the node's cluster name
+        }
+        *c = new;
+        c.save(&s.config_path)
+    };
     match save {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "saved": true, "restart_required": restart_required }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "saved": false, "error": e }))).into_response(),
