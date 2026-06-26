@@ -285,7 +285,9 @@ git commit -m "feat(ipad): C shim to start llama.cpp RPC server on a Metal backe
 - [ ] **Step 1: Create the Xcode project**
 
 In Xcode (matching iPadOS 27 Beta 2 — see Development Environment in the spec): New Project → iOS App → name `AirpcezWorker`, interface SwiftUI, language Swift, save into `ios/AirpcezWorker/`. Then:
-- Add `Frameworks/llama.xcframework` to the target (General → Frameworks, Libraries → "Embed & Sign").
+- Add `Frameworks/llama.xcframework` to the target (General → Frameworks, Libraries → **"Do Not Embed"** — it wraps *static* libs, so it's linked into the binary, not embedded as a dynamic framework).
+- Add `NSLocalNetworkUsageDescription` to Info.plist (e.g. "Joins the airpcez cluster over the local network"). A listening RPC socket triggers iOS Local Network privacy; without this the host's connection is silently blocked.
+- Delete the two stub files Xcode auto-generates (`AirpcezWorkerApp.swift`, `ContentView.swift`) before adding ours — same type names would collide (duplicate `@main`).
 - Add `Sources/RpcShim/rpc_shim.c` to the target's **Compile Sources**. Expose the shim to Swift via a **bridging header**: set Build Settings → "Objective-C Bridging Header" to `Sources/App/AirpcezWorker-Bridging-Header.h` (it `#include`s `rpc_shim.h`), and add `$(SRCROOT)/Sources/RpcShim/include` to **Header Search Paths**. (A bridging header is far more reliable than a module map in a hand-built app target — RpcServer.swift therefore does NOT `import RpcShim`.)
 - Add `Generated/LlamaVersion.swift` to the target.
 - Link required system frameworks: `Metal`, `MetalKit`, `Accelerate`, `Foundation`.
