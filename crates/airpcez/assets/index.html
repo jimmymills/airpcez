@@ -204,12 +204,12 @@
             <div class="field-row">
               <label for="model-hf">Model (HF repo:quant)</label>
               <input id="model-hf" type="text" placeholder="org/model:Q4_K_M" />
-              <div class="input-hint">Used as -hf flag if set</div>
+              <div class="input-hint">-hf — downloads if not cached. Setting this clears the local path.</div>
             </div>
             <div class="field-row">
               <label for="model-path">Local model path</label>
-              <input id="model-path" type="text" placeholder="/models/gguf/model.gguf" />
-              <div class="input-hint">Used as -m flag if set (hf takes precedence)</div>
+              <input id="model-path" type="text" placeholder="/models/gguf/model.gguf or a folder" />
+              <div class="input-hint">-m — a .gguf file, or a folder / HF cache dir (auto-resolves the .gguf).</div>
             </div>
           </div>
           <div class="grid-2">
@@ -556,6 +556,18 @@
       }
       // Clear any previous suggest result when selection changes
       document.getElementById("suggest-result").innerHTML = "";
+    });
+
+    // Model source is -hf OR a local path, never both — keep them mutually exclusive so a
+    // local path can't be silently ignored while -hf is still populated (the download trap).
+    document.getElementById("model-path").addEventListener("input", (e) => {
+      if (e.target.value.trim()) {
+        document.getElementById("model-hf").value = "";
+        document.getElementById("model-select").value = "";
+      }
+    });
+    document.getElementById("model-hf").addEventListener("input", (e) => {
+      if (e.target.value.trim()) document.getElementById("model-path").value = "";
     });
 
     loadCatalog();

@@ -154,12 +154,64 @@ struct LaunchRequest {
     ctx: Option<u32>,
 }
 
+/// Pick the GGUF to load from a directory listing: prefer the first shard of a sharded
+/// model (`*-00001-of-*.gguf`), else the sole `.gguf`; None if absent or ambiguous.
+fn pick_gguf(names: Vec<String>) -> Option<String> {
+    let ggufs: Vec<String> = names.into_iter()
+        .filter(|n| n.to_lowercase().ends_with(".gguf"))
+        .collect();
+    if let Some(shard) = ggufs.iter().find(|n| n.contains("-00001-of-")) {
+        return Some(shard.clone());
+    }
+    if ggufs.len() == 1 {
+        return ggufs.into_iter().next();
+    }
+    None
+}
+
+/// Resolve a user-supplied model path for `-m`: a file is used as-is; a directory is
+/// searched for a .gguf, descending into a HuggingFace `snapshots/<hash>/` cache layout
+/// (newest snapshot). This is why pointing at `models--org--repo/` works.
+fn resolve_model_path(path: &str) -> Result<String, String> {
+    let p = std::path::Path::new(path);
+    if p.is_file() {
+        return Ok(path.to_string());
+    }
+    if !p.exists() {
+        return Err(format!("model path does not exist: {path}"));
+    }
+    let snapshots = p.join("snapshots");
+    let dir = if snapshots.is_dir() {
+        std::fs::read_dir(&snapshots).map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|d| d.is_dir())
+            .max_by_key(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok())
+            .ok_or_else(|| format!("no snapshot directory under {}", snapshots.display()))?
+    } else {
+        p.to_path_buf()
+    };
+    let names: Vec<String> = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    match pick_gguf(names) {
+        Some(f) => Ok(dir.join(f).to_string_lossy().into_owned()),
+        None => Err(format!(
+            "no single .gguf in {} — point the path at the exact .gguf file (it has none, or several quants)",
+            dir.display()
+        )),
+    }
+}
+
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
     use airpcez_core::flags::*;
     let model = match (req.model_hf, req.model_path) {
-        (Some(hf), _) => ModelRef::Hf(hf),
-        (None, Some(p)) => ModelRef::Local(p),
-        (None, None) => return (StatusCode::BAD_REQUEST, "model_hf or model_path required".to_string()).into_response(),
+        (Some(hf), _) if !hf.trim().is_empty() => ModelRef::Hf(hf),
+        (_, Some(p)) if !p.trim().is_empty() => match resolve_model_path(p.trim()) {
+            Ok(file) => ModelRef::Local(file),
+            Err(e) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": e }))).into_response(),
+        },
+        _ => return (StatusCode::BAD_REQUEST, "model_hf or model_path required".to_string()).into_response(),
     };
     let cpu_moe = match req.cpu_moe.as_deref() {
         Some("all") => CpuMoe::All,
@@ -244,4 +296,23 @@ async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestReque
     let mut plan = airpcez_core::planner::suggest_plan(&cluster, &req.meta, req.ctx);
     plan.warnings = warnings;
     Json(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_gguf;
+    #[test]
+    fn pick_gguf_prefers_first_shard_then_sole_file() {
+        assert_eq!(pick_gguf(vec!["a.txt".into(), "model.gguf".into()]).as_deref(), Some("model.gguf"));
+        assert_eq!(
+            pick_gguf(vec![
+                "m-00002-of-00003.gguf".into(),
+                "m-00001-of-00003.gguf".into(),
+                "m-00003-of-00003.gguf".into(),
+            ]).as_deref(),
+            Some("m-00001-of-00003.gguf")
+        );
+        assert_eq!(pick_gguf(vec!["q4.gguf".into(), "q8.gguf".into()]), None); // ambiguous quants
+        assert_eq!(pick_gguf(vec!["readme.md".into()]), None); // no gguf present
+    }
 }
