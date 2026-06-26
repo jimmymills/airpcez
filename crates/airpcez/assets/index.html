@@ -212,6 +212,11 @@
               <div class="input-hint">-m — a .gguf file, or a folder / HF cache dir (auto-resolves the .gguf).</div>
             </div>
           </div>
+          <div class="field-row">
+            <label for="hf-cache-dir">HuggingFace cache dir (optional)</label>
+            <input id="hf-cache-dir" type="text" placeholder="/mnt/ssd/llama/models" />
+            <div class="input-hint">If set, a catalog / -hf pick loads from this HF cache (models--org--repo/…) via -m — no download. Defaults to the host config.</div>
+          </div>
           <div class="grid-2">
             <div class="field-row">
               <label for="launch-ngl">GPU layers (-ngl)</label>
@@ -742,6 +747,7 @@
       const deviceVal = document.getElementById("launch-device").value.trim();
       const cpuMoeSelect = document.getElementById("launch-cpu-moe").value;
       const cpuMoeN = document.getElementById("launch-cpu-moe-n").value.trim();
+      const hfCacheDir = document.getElementById("hf-cache-dir").value.trim();
 
       const body = {};
       if (modelHf) body.model_hf = modelHf;
@@ -753,6 +759,7 @@
       if (deviceVal) body.device = deviceVal;
       if (cpuMoeSelect === "all") body.cpu_moe = "all";
       else if (cpuMoeSelect === "custom" && cpuMoeN) body.cpu_moe = cpuMoeN;
+      if (hfCacheDir) body.hf_cache_dir = hfCacheDir;
 
       try {
         const resp = await fetch("/host/launch", {

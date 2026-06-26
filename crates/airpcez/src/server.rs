@@ -19,6 +19,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub llama_dir: Option<String>,
     pub llama_port: u16,
+    pub hf_cache_dir: Option<String>,
 }
 
 impl AppState {
@@ -30,6 +31,7 @@ impl AppState {
             http: reqwest::Client::new(),
             llama_dir: None,
             llama_port: 8080,
+            hf_cache_dir: None,
         }
     }
 }
@@ -152,14 +154,27 @@ struct LaunchRequest {
     device: Option<String>,
     cpu_moe: Option<String>,
     ctx: Option<u32>,
+    hf_cache_dir: Option<String>,
 }
 
-/// Pick the GGUF to load from a directory listing: prefer the first shard of a sharded
-/// model (`*-00001-of-*.gguf`), else the sole `.gguf`; None if absent or ambiguous.
-fn pick_gguf(names: Vec<String>) -> Option<String> {
-    let ggufs: Vec<String> = names.into_iter()
+/// "unsloth/Qwen3.6-35B-A3B-GGUF" -> "models--unsloth--Qwen3.6-35B-A3B-GGUF" (HF hub layout).
+fn hf_cache_dirname(repo: &str) -> String {
+    format!("models--{}", repo.replace('/', "--"))
+}
+
+/// Pick the GGUF from a directory listing: filter by `quant` substring when given, then
+/// prefer the first shard of a sharded model (`*-00001-of-*.gguf`), else the sole `.gguf`.
+fn pick_gguf(names: Vec<String>, quant: Option<&str>) -> Option<String> {
+    let mut ggufs: Vec<String> = names.into_iter()
         .filter(|n| n.to_lowercase().ends_with(".gguf"))
         .collect();
+    if let Some(q) = quant {
+        let ql = q.to_lowercase();
+        let matched: Vec<String> = ggufs.iter().filter(|n| n.to_lowercase().contains(&ql)).cloned().collect();
+        if !matched.is_empty() {
+            ggufs = matched;
+        }
+    }
     if let Some(shard) = ggufs.iter().find(|n| n.contains("-00001-of-")) {
         return Some(shard.clone());
     }
@@ -169,9 +184,27 @@ fn pick_gguf(names: Vec<String>) -> Option<String> {
     None
 }
 
-/// Resolve a user-supplied model path for `-m`: a file is used as-is; a directory is
-/// searched for a .gguf, descending into a HuggingFace `snapshots/<hash>/` cache layout
-/// (newest snapshot). This is why pointing at `models--org--repo/` works.
+/// Find a .gguf inside a directory, descending into a HuggingFace `snapshots/<hash>/`
+/// cache layout (newest snapshot) when present. `quant` narrows multi-quant dirs.
+fn find_gguf_in_dir(dir: &std::path::Path, quant: Option<&str>) -> Option<String> {
+    let snapshots = dir.join("snapshots");
+    let search = if snapshots.is_dir() {
+        std::fs::read_dir(&snapshots).ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|d| d.is_dir())
+            .max_by_key(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok())?
+    } else {
+        dir.to_path_buf()
+    };
+    let names: Vec<String> = std::fs::read_dir(&search).ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    pick_gguf(names, quant).map(|f| search.join(f).to_string_lossy().into_owned())
+}
+
+/// Resolve a user-supplied `-m` path: a file is used as-is; a directory (incl. an HF
+/// `models--org--repo/` cache dir) is resolved to its .gguf.
 fn resolve_model_path(path: &str) -> Result<String, String> {
     let p = std::path::Path::new(path);
     if p.is_file() {
@@ -180,33 +213,38 @@ fn resolve_model_path(path: &str) -> Result<String, String> {
     if !p.exists() {
         return Err(format!("model path does not exist: {path}"));
     }
-    let snapshots = p.join("snapshots");
-    let dir = if snapshots.is_dir() {
-        std::fs::read_dir(&snapshots).map_err(|e| e.to_string())?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|d| d.is_dir())
-            .max_by_key(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok())
-            .ok_or_else(|| format!("no snapshot directory under {}", snapshots.display()))?
-    } else {
-        p.to_path_buf()
+    find_gguf_in_dir(p, None)
+        .ok_or_else(|| format!("no single .gguf in {path} — point at the exact .gguf file (none, or several quants)"))
+}
+
+/// Try to resolve an `org/repo:quant` selection to a locally-cached .gguf under an HF hub
+/// cache dir, so a cached model loads via `-m` without any download. None → not cached.
+fn resolve_hf_in_cache(cache_dir: &str, hf: &str) -> Option<String> {
+    let (repo, quant) = match hf.rsplit_once(':') {
+        Some((r, q)) => (r, Some(q)),
+        None => (hf, None),
     };
-    let names: Vec<String> = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    match pick_gguf(names) {
-        Some(f) => Ok(dir.join(f).to_string_lossy().into_owned()),
-        None => Err(format!(
-            "no single .gguf in {} — point the path at the exact .gguf file (it has none, or several quants)",
-            dir.display()
-        )),
+    let repo_dir = std::path::Path::new(cache_dir).join(hf_cache_dirname(repo));
+    if !repo_dir.is_dir() {
+        return None;
     }
+    find_gguf_in_dir(&repo_dir, quant)
 }
 
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
     use airpcez_core::flags::*;
+    // Effective HF cache dir: per-launch field overrides the host config default.
+    let cache_dir = req.hf_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .or(s.hf_cache_dir.as_deref());
     let model = match (req.model_hf, req.model_path) {
-        (Some(hf), _) if !hf.trim().is_empty() => ModelRef::Hf(hf),
+        (Some(hf), _) if !hf.trim().is_empty() => {
+            let hf = hf.trim();
+            // Prefer a locally-cached copy (load via -m, no download) when a cache dir is set.
+            match cache_dir.and_then(|c| resolve_hf_in_cache(c, hf)) {
+                Some(local) => ModelRef::Local(local),
+                None => ModelRef::Hf(hf.to_string()),
+            }
+        }
         (_, Some(p)) if !p.trim().is_empty() => match resolve_model_path(p.trim()) {
             Ok(file) => ModelRef::Local(file),
             Err(e) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": e }))).into_response(),
@@ -300,19 +338,52 @@ async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestReque
 
 #[cfg(test)]
 mod tests {
-    use super::pick_gguf;
+    use super::{hf_cache_dirname, pick_gguf};
     #[test]
     fn pick_gguf_prefers_first_shard_then_sole_file() {
-        assert_eq!(pick_gguf(vec!["a.txt".into(), "model.gguf".into()]).as_deref(), Some("model.gguf"));
+        assert_eq!(pick_gguf(vec!["a.txt".into(), "model.gguf".into()], None).as_deref(), Some("model.gguf"));
         assert_eq!(
             pick_gguf(vec![
                 "m-00002-of-00003.gguf".into(),
                 "m-00001-of-00003.gguf".into(),
                 "m-00003-of-00003.gguf".into(),
-            ]).as_deref(),
+            ], None).as_deref(),
             Some("m-00001-of-00003.gguf")
         );
-        assert_eq!(pick_gguf(vec!["q4.gguf".into(), "q8.gguf".into()]), None); // ambiguous quants
-        assert_eq!(pick_gguf(vec!["readme.md".into()]), None); // no gguf present
+        assert_eq!(pick_gguf(vec!["q4.gguf".into(), "q8.gguf".into()], None), None); // ambiguous quants
+        assert_eq!(pick_gguf(vec!["readme.md".into()], None), None); // no gguf present
+    }
+    #[test]
+    fn pick_gguf_narrows_by_quant() {
+        let files = vec![
+            "Qwen3.6-35B-A3B-Q4_K_M.gguf".to_string(),
+            "Qwen3.6-35B-A3B-Q8_0.gguf".to_string(),
+        ];
+        // Without a quant the two are ambiguous; with one it resolves.
+        assert_eq!(pick_gguf(files.clone(), None), None);
+        assert_eq!(pick_gguf(files, Some("Q4_K_M")).as_deref(), Some("Qwen3.6-35B-A3B-Q4_K_M.gguf"));
+    }
+    #[test]
+    fn hf_repo_maps_to_cache_dirname() {
+        assert_eq!(hf_cache_dirname("unsloth/Qwen3.6-35B-A3B-GGUF"), "models--unsloth--Qwen3.6-35B-A3B-GGUF");
+    }
+    #[test]
+    fn resolve_hf_in_cache_finds_local_gguf_by_quant() {
+        use std::fs;
+        let base = std::env::temp_dir().join("airpcez_hf_cache_test");
+        let _ = fs::remove_dir_all(&base);
+        let snap = base.join("models--unsloth--Foo-GGUF").join("snapshots").join("abc123");
+        fs::create_dir_all(&snap).unwrap();
+        fs::write(snap.join("Foo-Q4_K_M.gguf"), b"x").unwrap();
+        fs::write(snap.join("Foo-Q8_0.gguf"), b"x").unwrap();
+
+        let cache = base.to_str().unwrap();
+        assert_eq!(
+            super::resolve_hf_in_cache(cache, "unsloth/Foo-GGUF:Q4_K_M").as_deref(),
+            Some(snap.join("Foo-Q4_K_M.gguf").to_str().unwrap())
+        );
+        // Not in the cache → None (caller then falls back to a real -hf download).
+        assert_eq!(super::resolve_hf_in_cache(cache, "unsloth/Bar-GGUF:Q4_K_M"), None);
+        let _ = fs::remove_dir_all(&base);
     }
 }

@@ -25,6 +25,7 @@ async fn main() {
         http: reqwest::Client::new(),
         llama_dir: config.llama_dir.clone(),
         llama_port: config.llama_port,
+        hf_cache_dir: config.hf_cache_dir.clone(),
     };
     airpcez::server::run_server(config.ui_port, state).await;
 }

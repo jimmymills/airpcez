@@ -9,6 +9,7 @@ pub struct Config {
     pub llama_port: u16,
     pub role: Role,
     pub llama_dir: Option<String>,
+    pub hf_cache_dir: Option<String>,
     pub node_name: String,
     #[serde(default)]
     pub nodes: Vec<airpcez_core::cluster::NodeEntry>,
@@ -22,6 +23,7 @@ impl Default for Config {
             llama_port: 8080,
             role: Role::Worker,
             llama_dir: None,
+            hf_cache_dir: None,
             node_name: sysinfo::System::host_name()
                 .unwrap_or_else(|| "airpcez-node".to_string()),
             nodes: Vec::new(),
