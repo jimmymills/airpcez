@@ -680,19 +680,40 @@
       healthTimer = setInterval(() => pollHealthOnce(openaiUrl, chatBase, resultEl), 2500);
     }
 
-    document.getElementById("btn-host-logs").addEventListener("click", async () => {
+    // ─── Live host logs (poll /host/logs so you can watch the load progress) ───────
+    let logsTimer = null;
+    async function fetchLogsOnce() {
       const pre = document.getElementById("host-logs");
-      pre.style.display = "block";
-      pre.textContent = "fetching…";
       try {
         const d = await (await fetch("/host/logs")).json();
         const lines = d.lines || [];
+        // Only auto-scroll if already pinned near the bottom, so a manual scroll-up
+        // to read earlier output isn't yanked back down each tick.
+        const pinned = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
         // textContent auto-escapes — safe to dump raw llama-server output.
         pre.textContent = "[supervisor: " + (d.status || "?") + "]\n" +
           (lines.length ? lines.join("\n") : "(no output captured yet)");
-        pre.scrollTop = pre.scrollHeight;
+        if (pinned) pre.scrollTop = pre.scrollHeight;
       } catch (e) {
         pre.textContent = "failed to fetch logs: " + e.message;
+      }
+    }
+    function stopLogsPolling() {
+      if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+      document.getElementById("btn-host-logs").textContent = "Logs";
+    }
+    function startLogsPolling() {
+      document.getElementById("host-logs").style.display = "block";
+      fetchLogsOnce();
+      if (!logsTimer) logsTimer = setInterval(fetchLogsOnce, 1500);
+      document.getElementById("btn-host-logs").textContent = "Logs ⏸ (live)";
+    }
+    document.getElementById("btn-host-logs").addEventListener("click", () => {
+      if (logsTimer) {
+        stopLogsPolling();
+        document.getElementById("host-logs").style.display = "none";
+      } else {
+        startLogsPolling();
       }
     });
 
@@ -735,8 +756,10 @@
             ? openaiUrl.slice(0, -3)
             : openaiUrl.replace(/\/v1$/, "");
           // The process has spawned, but llama-server still loads the model (and
-          // distributes layers over RPC). Poll readiness rather than claim "launched".
+          // distributes layers over RPC). Poll readiness rather than claim "launched",
+          // and auto-stream the logs so the load progress is visible live.
           startHealthPolling(openaiUrl, chatBase, resultEl);
+          startLogsPolling();
         } else {
           const txt = await resp.text();
           resultEl.innerHTML = "<span class='status-err'>✗ " + resp.status + " — " + txt.slice(0, 200) + "</span>";
