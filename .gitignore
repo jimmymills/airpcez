@@ -4,3 +4,6 @@
 .DS_Store
 /airpcez.toml
 airpcez-profiles.toml
+
+# serena MCP local tooling config (per-machine)
+.serena/
