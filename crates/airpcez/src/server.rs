@@ -106,11 +106,12 @@ async fn worker_start_handler(
     State(s): State<AppState>,
     Json(req): Json<WorkerStartRequest>,
 ) -> impl IntoResponse {
+    let device = req.device.clone().or_else(|| s.config.lock().unwrap().rpc_device_filter());
     let spec = airpcez_core::flags::rpc_server_spec(
         &req.binary,
         "0.0.0.0",
         req.rpc_port,
-        req.device.as_deref(),
+        device.as_deref(),
     );
     match s.supervisor.start(spec) {
         Ok(()) => StatusCode::OK.into_response(),

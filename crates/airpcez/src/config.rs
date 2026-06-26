@@ -12,6 +12,7 @@ pub struct Config {
     pub llama_dir: Option<String>,
     pub hf_cache_dir: Option<String>,
     pub rpc_binary: Option<String>,
+    pub rpc_device: Option<String>,
     pub node_name: String,
     #[serde(default)]
     pub nodes: Vec<airpcez_core::cluster::NodeEntry>,
@@ -27,6 +28,7 @@ impl Default for Config {
             llama_dir: None,
             hf_cache_dir: None,
             rpc_binary: None,
+            rpc_device: None,
             node_name: sysinfo::System::host_name()
                 .unwrap_or_else(|| "airpcez-node".to_string()),
             nodes: Vec::new(),
@@ -42,6 +44,21 @@ impl Config {
             .clone()
             .or_else(|| self.llama_dir.as_ref().map(|d| format!("{}/rpc-server", d.trim_end_matches('/'))))
             .unwrap_or_else(|| "rpc-server".to_string())
+    }
+
+    /// The rpc-server `-d` device filter for this worker: an explicit `rpc_device`,
+    /// else — ONLY on Apple Silicon (macos+aarch64), where RAM and VRAM are unified —
+    /// the GPU device `MTL0`, so rpc-server doesn't also serve the redundant 0-MiB
+    /// BLAS/Accelerate device. On every other platform, None (serve all devices).
+    pub fn rpc_device_filter(&self) -> Option<String> {
+        if let Some(d) = &self.rpc_device {
+            return Some(d.clone());
+        }
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Some("MTL0".to_string())
+        } else {
+            None
+        }
     }
 
     pub fn load(path: &Path) -> Config {
@@ -121,6 +138,12 @@ pub fn apply_cli_overrides(mut config: Config, args: &[String]) -> Config {
                     i += 1;
                 }
             }
+            "--rpc-device" => {
+                if let Some(v) = value {
+                    config.rpc_device = Some(v.to_string());
+                    i += 1;
+                }
+            }
             "--node-name" => {
                 if let Some(v) = value {
                     config.node_name = v.to_string();
@@ -186,5 +209,31 @@ mod tests {
         let c = apply_cli_overrides(Config::default(), &args);
         // node_name stays as whatever the default hostname is — just assert no panic
         let _ = c.node_name;
+    }
+
+    #[test]
+    fn rpc_device_filter_explicit_override_wins() {
+        let mut c = Config::default();
+        c.rpc_device = Some("CUDA0".into());
+        assert_eq!(c.rpc_device_filter(), Some("CUDA0".to_string()));
+    }
+
+    #[test]
+    fn rpc_device_filter_default_platform_behavior() {
+        assert_eq!(
+            Config::default().rpc_device_filter(),
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                Some("MTL0".to_string())
+            } else {
+                None
+            }
+        );
+    }
+
+    #[test]
+    fn apply_cli_overrides_rpc_device() {
+        let args: Vec<String> = ["--rpc-device", "CUDA0"].iter().map(|s| s.to_string()).collect();
+        let c = apply_cli_overrides(Config::default(), &args);
+        assert_eq!(c.rpc_device, Some("CUDA0".into()));
     }
 }

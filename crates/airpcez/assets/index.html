@@ -332,6 +332,10 @@
             <input id="cfg-rpc-binary" type="text" placeholder="rpc-server (leave blank to unset)" />
           </div>
           <div class="field-row">
+            <label for="cfg-rpc-device">RPC device</label>
+            <input id="cfg-rpc-device" type="text" placeholder="Apple Silicon: blank auto-pins GPU (MTL0); set a device name to override" />
+          </div>
+          <div class="field-row">
             <label for="cfg-hf-cache-dir">HF cache dir</label>
             <input id="cfg-hf-cache-dir" type="text" placeholder="/path/to/hf/cache (leave blank to unset)" />
           </div>
@@ -907,6 +911,7 @@
         document.getElementById("cfg-node-name").value = cfg.node_name ?? "";
         document.getElementById("cfg-llama-dir").value = cfg.llama_dir ?? "";
         document.getElementById("cfg-rpc-binary").value = cfg.rpc_binary ?? "";
+        document.getElementById("cfg-rpc-device").value = cfg.rpc_device ?? "";
         document.getElementById("cfg-hf-cache-dir").value = cfg.hf_cache_dir ?? "";
       } catch (e) {
         console.warn("settings load failed", e);
@@ -925,6 +930,7 @@
       const llamaPortRaw = document.getElementById("cfg-llama-port").value.trim();
       const llama_dir = document.getElementById("cfg-llama-dir").value.trim() || null;
       const rpc_binary = document.getElementById("cfg-rpc-binary").value.trim() || null;
+      const rpc_device = document.getElementById("cfg-rpc-device").value.trim() || null;
       const hf_cache_dir = document.getElementById("cfg-hf-cache-dir").value.trim() || null;
       const node_name = document.getElementById("cfg-node-name").value.trim();
       const role = document.getElementById("cfg-role").value;
@@ -936,6 +942,7 @@
         role,
         llama_dir,
         rpc_binary,
+        rpc_device,
         hf_cache_dir,
         node_name,
       });

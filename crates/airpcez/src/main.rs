@@ -27,6 +27,7 @@ async fn main() {
     let bound_ui_port = loaded.ui_port;
     let rpc_port = loaded.rpc_port;
     let rpc_bin = loaded.rpc_binary_path();
+    let rpc_device = loaded.rpc_device_filter();
     let config = Arc::new(Mutex::new(loaded));
     let provider = Arc::new(LocalStats { config: config.clone() });
     let supervisor: Arc<dyn ProcessBackend> = Arc::new(TokioSupervisor::new());
@@ -40,7 +41,7 @@ async fn main() {
     };
 
     if worker_mode {
-        let spec = airpcez_core::flags::rpc_server_spec(&rpc_bin, "0.0.0.0", rpc_port, None);
+        let spec = airpcez_core::flags::rpc_server_spec(&rpc_bin, "0.0.0.0", rpc_port, rpc_device.as_deref());
         match supervisor.start(spec) {
             Ok(()) => eprintln!("[airpcez] --worker: started rpc-server `{rpc_bin}` on 0.0.0.0:{rpc_port}"),
             Err(e) => {
