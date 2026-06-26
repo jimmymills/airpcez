@@ -292,6 +292,59 @@
         </div>
       </div>
 
+      <!-- Settings section -->
+      <div>
+        <h2>Settings</h2>
+        <div class="section-card" style="max-width:560px;">
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="cfg-ui-port">UI port <span style="color:#6e7681;">(restart to apply)</span></label>
+              <input id="cfg-ui-port" type="number" min="1" max="65535" placeholder="8675" />
+            </div>
+            <div class="field-row">
+              <label for="cfg-rpc-port">RPC port</label>
+              <input id="cfg-rpc-port" type="number" min="1" max="65535" placeholder="50052" />
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-row">
+              <label for="cfg-llama-port">llama port</label>
+              <input id="cfg-llama-port" type="number" min="1" max="65535" placeholder="8080" />
+            </div>
+            <div class="field-row">
+              <label for="cfg-role">Role</label>
+              <select id="cfg-role">
+                <option value="worker">worker</option>
+                <option value="host">host</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <label for="cfg-node-name">Node name</label>
+            <input id="cfg-node-name" type="text" placeholder="my-node" />
+          </div>
+          <div class="field-row">
+            <label for="cfg-llama-dir">llama dir</label>
+            <input id="cfg-llama-dir" type="text" placeholder="/path/to/llama.cpp/build/bin (leave blank to unset)" />
+          </div>
+          <div class="field-row">
+            <label for="cfg-rpc-binary">RPC binary</label>
+            <input id="cfg-rpc-binary" type="text" placeholder="rpc-server (leave blank to unset)" />
+          </div>
+          <div class="field-row">
+            <label for="cfg-hf-cache-dir">HF cache dir</label>
+            <input id="cfg-hf-cache-dir" type="text" placeholder="/path/to/hf/cache (leave blank to unset)" />
+          </div>
+          <div class="btn-row">
+            <button class="btn-green" id="btn-save-settings">Save settings</button>
+            <span id="settings-status" style="font-size:0.78rem; align-self:center;"></span>
+          </div>
+          <div id="settings-restart-note" style="display:none; margin-top:8px;" class="warn-banner">
+            ui_port change needs a restart to take effect
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -836,6 +889,82 @@
     document.getElementById("btn-stop").addEventListener("click", () => {
       workerAction("/worker/stop", null);
     });
+
+    // ─── Settings panel ────────────────────────────────────────────────────────
+    let _stashedConfig = null;
+
+    async function loadSettings() {
+      try {
+        const resp = await fetch("/config");
+        if (!resp.ok) return;
+        const cfg = await resp.json();
+        _stashedConfig = cfg;
+        document.getElementById("cfg-ui-port").value = cfg.ui_port ?? "";
+        document.getElementById("cfg-rpc-port").value = cfg.rpc_port ?? "";
+        document.getElementById("cfg-llama-port").value = cfg.llama_port ?? "";
+        const roleEl = document.getElementById("cfg-role");
+        if (cfg.role === "host" || cfg.role === "worker") roleEl.value = cfg.role;
+        document.getElementById("cfg-node-name").value = cfg.node_name ?? "";
+        document.getElementById("cfg-llama-dir").value = cfg.llama_dir ?? "";
+        document.getElementById("cfg-rpc-binary").value = cfg.rpc_binary ?? "";
+        document.getElementById("cfg-hf-cache-dir").value = cfg.hf_cache_dir ?? "";
+      } catch (e) {
+        console.warn("settings load failed", e);
+      }
+    }
+
+    document.getElementById("btn-save-settings").addEventListener("click", async () => {
+      const statusEl = document.getElementById("settings-status");
+      const restartNote = document.getElementById("settings-restart-note");
+      statusEl.textContent = "saving…";
+      statusEl.style.color = "#8b949e";
+      restartNote.style.display = "none";
+
+      const uiPortRaw = document.getElementById("cfg-ui-port").value.trim();
+      const rpcPortRaw = document.getElementById("cfg-rpc-port").value.trim();
+      const llamaPortRaw = document.getElementById("cfg-llama-port").value.trim();
+      const llama_dir = document.getElementById("cfg-llama-dir").value.trim() || null;
+      const rpc_binary = document.getElementById("cfg-rpc-binary").value.trim() || null;
+      const hf_cache_dir = document.getElementById("cfg-hf-cache-dir").value.trim() || null;
+      const node_name = document.getElementById("cfg-node-name").value.trim();
+      const role = document.getElementById("cfg-role").value;
+
+      const body = Object.assign({}, _stashedConfig || {}, {
+        ui_port: uiPortRaw ? parseInt(uiPortRaw, 10) : (_stashedConfig ? _stashedConfig.ui_port : null),
+        rpc_port: rpcPortRaw ? parseInt(rpcPortRaw, 10) : (_stashedConfig ? _stashedConfig.rpc_port : null),
+        llama_port: llamaPortRaw ? parseInt(llamaPortRaw, 10) : (_stashedConfig ? _stashedConfig.llama_port : null),
+        role,
+        llama_dir,
+        rpc_binary,
+        hf_cache_dir,
+        node_name,
+      });
+
+      try {
+        const resp = await fetch("/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.saved) {
+          statusEl.textContent = "✓ saved";
+          statusEl.style.color = "#238636";
+          _stashedConfig = body;
+          if (data.restart_required) {
+            restartNote.style.display = "";
+          }
+        } else {
+          statusEl.textContent = "✗ " + escapeHtml(data.error || "unknown error");
+          statusEl.style.color = "#da3633";
+        }
+      } catch (e) {
+        statusEl.textContent = "✗ " + escapeHtml(e.message);
+        statusEl.style.color = "#da3633";
+      }
+    });
+
+    loadSettings();
   </script>
 </body>
 </html>
