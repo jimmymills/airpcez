@@ -300,7 +300,8 @@ Create `ios/AirpcezWorker/Sources/App/RpcServer.swift`:
 
 ```swift
 import Foundation
-import RpcShim
+import Combine   // ObservableObject / @Published live in Combine
+// C shim (rpc_shim_*) is exposed via the app target's bridging header — no module import.
 
 @MainActor
 final class RpcServer: ObservableObject {

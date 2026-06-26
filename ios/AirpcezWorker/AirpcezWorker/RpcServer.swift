@@ -1,4 +1,5 @@
 import Foundation
+import Combine   // ObservableObject / @Published live in Combine
 // The C shim (rpc_shim_start / rpc_shim_is_metal_available) is exposed to Swift via the
 // app target's bridging header (AirpcezWorker-Bridging-Header.h) — no module import needed.
 
