@@ -400,7 +400,7 @@ mod tests {
         let p = suggest_plan(&cluster, &meta, 8192);
         assert_eq!(p.flash_attn.as_deref(), Some("on"));
         let hint = p.host_hint.expect("host hint present");
-        assert!(hint.contains("big-box"), "should recommend the highest-RAM node: {hint}");
+        assert!(hint.contains("big-box"), "should recommend the Host-role node: {hint}");
     }
 
     #[test]

@@ -403,6 +403,11 @@ async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody
 /// devices positionally (local devices, then `--rpc` servers in list order), and a tier-3
 /// plan appends the CPU-node tensor-split share LAST — so CPU-only nodes must be the last
 /// `--rpc` entries for the split to align with the right device.
+///
+/// Ordering + the short-`--tensor-split` zero-fill (a non-tier-3 launch's GPU-only split is
+/// one entry shorter than the device list, leaving the trailing CPU node 0 layers) were both
+/// verified against llama.cpp b9800. Unreachable nodes have `stats: None` (the poller drops
+/// their stats) and are skipped here, so a sleeping CPU node never enters `--rpc`.
 fn ordered_rpc_endpoints(cluster: &airpcez_core::cluster::ClusterStatus) -> Vec<String> {
     let mut gpu_eps = Vec::new();
     let mut cpu_eps = Vec::new();

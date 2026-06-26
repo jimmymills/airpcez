@@ -52,10 +52,14 @@ impl Config {
             .unwrap_or_else(|| "rpc-server".to_string())
     }
 
-    /// The rpc-server `-d` device filter for this worker: an explicit `rpc_device`,
-    /// else — ONLY on Apple Silicon (macos+aarch64), where RAM and VRAM are unified —
-    /// the GPU device `MTL0`, so rpc-server doesn't also serve the redundant 0-MiB
-    /// BLAS/Accelerate device. On every other platform, None (serve all devices).
+    /// The rpc-server `-d` device filter for this worker, in priority order:
+    /// 1. an explicit `rpc_device`;
+    /// 2. else, if `advertise_gpu == false`, the `"CPU"` device — so a CPU-only worker
+    ///    serves its RAM-backed CPU device the host can offload to, not the 0-MiB BLAS
+    ///    accelerator rpc-server picks by default (fires on every platform);
+    /// 3. else — ONLY on Apple Silicon (macos+aarch64), where RAM and VRAM are unified —
+    ///    the GPU device `MTL0`, so rpc-server doesn't also serve the redundant 0-MiB
+    ///    BLAS/Accelerate device. On every other platform, None (serve all devices).
     pub fn rpc_device_filter(&self) -> Option<String> {
         if let Some(d) = &self.rpc_device {
             return Some(d.clone());
