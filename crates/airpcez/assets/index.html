@@ -988,7 +988,7 @@
     function setVal(id, v) { document.getElementById(id).value = (v == null ? "" : v); }
 
     function fillFormFromProfile(p) {
-      if (p.model && p.model.includes(".gguf")) { setVal("model-path", p.model); setVal("model-hf", ""); }
+      if (p.model && (p.model.startsWith('/') || p.model.startsWith('./') || p.model.endsWith('.gguf'))) { setVal("model-path", p.model); setVal("model-hf", ""); }
       else { setVal("model-hf", p.model); setVal("model-path", ""); }
       setVal("launch-ngl", p.ngl);
       setVal("launch-ctx", p.ctx);
