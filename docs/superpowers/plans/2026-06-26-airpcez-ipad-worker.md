@@ -286,7 +286,7 @@ git commit -m "feat(ipad): C shim to start llama.cpp RPC server on a Metal backe
 
 In Xcode (matching iPadOS 27 Beta 2 — see Development Environment in the spec): New Project → iOS App → name `AirpcezWorker`, interface SwiftUI, language Swift, save into `ios/AirpcezWorker/`. Then:
 - Add `Frameworks/llama.xcframework` to the target (General → Frameworks, Libraries → "Embed & Sign").
-- Add the `Sources/RpcShim` folder; set the target's **Import Paths**/header search to `Sources/RpcShim/include` and add the module map (Build Settings → Swift Compiler → Import Paths, or add `Sources/RpcShim/include` to the bridging/module search path).
+- Add `Sources/RpcShim/rpc_shim.c` to the target's **Compile Sources**. Expose the shim to Swift via a **bridging header**: set Build Settings → "Objective-C Bridging Header" to `Sources/App/AirpcezWorker-Bridging-Header.h` (it `#include`s `rpc_shim.h`), and add `$(SRCROOT)/Sources/RpcShim/include` to **Header Search Paths**. (A bridging header is far more reliable than a module map in a hand-built app target — RpcServer.swift therefore does NOT `import RpcShim`.)
 - Add `Generated/LlamaVersion.swift` to the target.
 - Link required system frameworks: `Metal`, `MetalKit`, `Accelerate`, `Foundation`.
 - **Build Settings → Other Linker Flags: add `-all_load`** (or `-force_load "$(SRCROOT)/Frameworks/.../libllama_full.a"`). Without this, the statically-linked Metal backend's self-registration is dead-stripped and `ggml_backend_dev_count()` sees no Metal device — the #1 silent M1 failure.

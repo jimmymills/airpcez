@@ -1,5 +1,6 @@
 import Foundation
-import RpcShim
+// The C shim (rpc_shim_start / rpc_shim_is_metal_available) is exposed to Swift via the
+// app target's bridging header (AirpcezWorker-Bridging-Header.h) — no module import needed.
 
 @MainActor
 final class RpcServer: ObservableObject {
