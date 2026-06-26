@@ -104,7 +104,12 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
     // never the all-or-nothing "all" that dumps ~all experts onto one host CPU and swaps.
     // Dense models keep the original "fill the GPU pool" behavior.
     let (ngl, cpu_moe, no_mmap) = if meta.is_moe {
-        let shortfall = meta.total_mib.saturating_sub(gpu_pool);
+        // An all-GPU (cpu_moe=off) plan must leave room beyond the weights for the KV cache,
+        // compute buffers, and per-device context — otherwise llama.cpp's param-fit fails.
+        // Reserve the SAME ~10% margin the fit verdict uses (below), but against the GPU pool;
+        // below that margin, spill the shortfall to CPU as a partial --n-cpu-moe count.
+        let gpu_need = meta.total_mib + meta.total_mib / 10;
+        let shortfall = gpu_need.saturating_sub(gpu_pool);
         if shortfall == 0 {
             (meta.n_layers, Some("off".to_string()), false)
         } else {
@@ -264,9 +269,10 @@ mod tests {
 
     #[test]
     fn moe_no_offload_when_gpu_roomy() {
-        // Whole 21 GB MoE fits on a 24 GB GPU → no CPU experts, mmap fine.
+        // Whole 21 GB MoE on a 28 GB GPU — comfortably above the weights + a ~10% margin for
+        // KV/compute/context → no CPU experts, mmap fine.
         let cluster = ClusterStatus {
-            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 24576, 24000, true)])],
+            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 30000, 28000, true)])],
             warnings: vec![],
         };
         let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: true };
@@ -274,6 +280,27 @@ mod tests {
         assert_eq!(p.cpu_moe.as_deref(), Some("off"));
         assert!(!p.no_mmap);
         assert_eq!(p.ngl, 48);
+    }
+
+    #[test]
+    fn moe_offloads_when_gpu_margin_thin() {
+        // Regression: GPU pool only marginally exceeds the model WEIGHTS. The old planner chose
+        // cpu_moe=off (packing the whole model onto GPUs with ~0 headroom), leaving no room for
+        // KV cache, compute buffers, or per-device context — so llama.cpp's param-fit failed
+        // ("failed to fit params"). The planner must keep a GPU margin and instead offload a few
+        // expert layers to CPU.
+        let cluster = ClusterStatus {
+            // gpu_pool = 22500 - 1024 = 21476, only ~2% above the 21000 weights.
+            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 24576, 22500, true)])],
+            warnings: vec![],
+        };
+        let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: true };
+        let p = suggest_plan(&cluster, &meta, 8192);
+        assert_eq!(p.ngl, 48);
+        let n: u32 = p.cpu_moe.as_deref().expect("cpu_moe set")
+            .parse().expect("thin GPU margin must offload a partial --n-cpu-moe, not 'off'");
+        assert!(n > 0 && n < 48, "expected a small partial offload, got {n}");
+        assert!(p.no_mmap, "--no-mmap recommended when experts live on CPU");
     }
 
     #[test]
