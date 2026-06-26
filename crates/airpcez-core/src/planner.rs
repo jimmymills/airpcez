@@ -129,8 +129,8 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
 
     // --- Layer packing (Tiers 1-2): GPU-first logic, unchanged ---
     let per_layer = (meta.total_mib / meta.n_layers.max(1) as u64).max(1);
-    let tensor_split = ratio_string(&splits);
-    let (ngl, cpu_moe, no_mmap) = if meta.is_moe {
+    let mut tensor_split = ratio_string(&splits);
+    let (mut ngl, cpu_moe, mut no_mmap) = if meta.is_moe {
         let gpu_need = meta.total_mib + meta.total_mib / 10;
         let shortfall = gpu_need.saturating_sub(gpu_pool);
         if shortfall == 0 {
@@ -159,9 +159,31 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
         (Fit::Tight, format!("tight — needs {} MiB; GPU + host CPU is {} MiB ({} GPU + {} host CPU){}",
             required, primary, gpu_pool, host_cpu, roomiest_suffix))
     } else if required <= primary + remote_cpu {
-        rpc_cpu_nodes = cpu_node_eps;
-        (Fit::Tight, format!("tight — +{} MiB spills to CPU node(s) via RPC (slow last resort); {} GPU + {} host CPU + {} remote CPU{}",
-            required - primary, gpu_pool, host_cpu, remote_cpu, roomiest_suffix))
+        if meta.is_moe {
+            // MoE experts spill to host CPU via --n-cpu-moe, which can't target a remote CPU
+            // device — so a MoE that overflows GPU + host is reported, not auto-wired.
+            (Fit::Tight, format!("tight — overflow needs CPU-node spillover, but MoE experts can't be auto-routed to a remote CPU (+{} MiB); use a smaller quant or add host RAM{}",
+                required - primary, roomiest_suffix))
+        } else {
+            // Dense: auto-route the overflow onto the CPU node(s) over RPC. Fill host CPU
+            // (Tier 2) first; only the remainder becomes remote-CPU (Tier 3) layers.
+            rpc_cpu_nodes = cpu_node_eps.clone();
+            let gpu_layers = ngl; // dense ngl == layers that fit on GPU
+            let host_cpu_layers = (host_cpu / per_layer) as u32;
+            let remote_layers = meta.n_layers
+                .saturating_sub(gpu_layers.saturating_add(host_cpu_layers))
+                .max(1);
+            let n_cpu = cpu_node_eps.len().max(1) as u64;
+            let remote_mib_per_node = remote_layers as u64 * per_layer / n_cpu;
+            for _ in 0..cpu_node_eps.len() {
+                splits.push(remote_mib_per_node);
+            }
+            tensor_split = ratio_string(&splits);
+            ngl = gpu_layers.saturating_add(remote_layers).min(meta.n_layers);
+            no_mmap = true;
+            (Fit::Tight, format!("tight — {} layers (+{} MiB) spill to CPU node(s) via RPC (slow last resort); {} GPU + {} host CPU + {} remote CPU{}",
+                remote_layers, remote_layers as u64 * per_layer, gpu_pool, host_cpu, remote_cpu, roomiest_suffix))
+        }
     } else {
         (Fit::WontFit, format!("won't fit — needs {} MiB but GPU + host + CPU nodes is only {} MiB; use a smaller quant{}",
             required, primary + remote_cpu, roomiest_suffix))
@@ -424,6 +446,37 @@ mod tests {
         assert_eq!(p.fit.fit, Fit::Tight);
         assert!(p.fit.detail.contains("RPC"), "verdict names the RPC CPU spillover: {}", p.fit.detail);
         assert_eq!(p.rpc_cpu_nodes, vec!["192.168.0.111:50052".to_string()]);
+    }
+
+    #[test]
+    fn tier3_dense_appends_remote_share_and_raises_ngl() {
+        // Dense 20 GB / 40 layers; GPU ~7 GB + host CPU ~8 GB can't hold it, CPU node (33 GB) can.
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 10000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            cpu_worker("cpu-box", 33000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 20000, n_layers: 40, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        // tensor_split gains a trailing CPU-node entry: host GPU + remote CPU = 2 fields.
+        assert_eq!(p.tensor_split.as_deref().unwrap().split(',').count(), 2);
+        assert_eq!(p.rpc_cpu_nodes, vec!["192.168.0.111:50052".to_string()]);
+        assert!(p.no_mmap, "offloaded weights -> --no-mmap");
+        // ngl now covers GPU layers + remote-CPU layers, i.e. more than the GPU-only count.
+        let gpu_only_ngl = ((8000u64 - 1024) * 10 / 11 / (20000 / 40)) as u32;
+        assert!(p.ngl > gpu_only_ngl && p.ngl <= 40, "ngl={} gpu_only={}", p.ngl, gpu_only_ngl);
+    }
+
+    #[test]
+    fn tier3_moe_does_not_autoroute() {
+        // Same overflow, but MoE: experts can't be routed to a remote CPU -> report, don't wire.
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 10000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            cpu_worker("cpu-box", 33000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 20000, n_layers: 40, is_moe: true };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        assert!(p.rpc_cpu_nodes.is_empty(), "MoE overflow is reported, not auto-wired");
+        assert_eq!(p.tensor_split.as_deref().unwrap().split(',').count(), 1, "no appended CPU share for MoE");
     }
 
     #[test]

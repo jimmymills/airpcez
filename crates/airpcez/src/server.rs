@@ -399,6 +399,25 @@ async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody
     }
 }
 
+/// RPC endpoints ordered GPU-nodes-first, CPU-only nodes last. llama.cpp numbers RPC
+/// devices positionally (local devices, then `--rpc` servers in list order), and a tier-3
+/// plan appends the CPU-node tensor-split share LAST — so CPU-only nodes must be the last
+/// `--rpc` entries for the split to align with the right device.
+fn ordered_rpc_endpoints(cluster: &airpcez_core::cluster::ClusterStatus) -> Vec<String> {
+    let mut gpu_eps = Vec::new();
+    let mut cpu_eps = Vec::new();
+    for n in &cluster.nodes {
+        let Some(st) = &n.stats else { continue };
+        let Some(ep) = &st.rpc_endpoint else { continue };
+        if st.devices.iter().any(|d| d.reliable && d.vram_total_mib > 0) {
+            gpu_eps.push(ep.clone());
+        } else {
+            cpu_eps.push(ep.clone());
+        }
+    }
+    gpu_eps.into_iter().chain(cpu_eps).collect()
+}
+
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
     // Extract config values before any await — never hold the Mutex across an await.
     let (llama_dir, llama_port, hf_cache_dir_cfg) = {
@@ -414,9 +433,7 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
     };
     let nodes = { s.config.lock().unwrap().nodes.clone() };
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
-    let eps: Vec<String> = cluster.nodes.iter()
-        .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
-        .collect();
+    let eps = ordered_rpc_endpoints(&cluster);
     let binary = match &llama_dir {
         Some(d) => format!("{d}/llama-server"),
         None => "llama-server".to_string(),
@@ -465,9 +482,7 @@ async fn launch_profile(State(s): State<AppState>, AxPath(id): AxPath<String>) -
     // We just set config.nodes = p.nodes above; use the profile's nodes directly.
     let nodes = p.nodes.clone();
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
-    let eps: Vec<String> = cluster.nodes.iter()
-        .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
-        .collect();
+    let eps = ordered_rpc_endpoints(&cluster);
     let binary = match &llama_dir {
         Some(d) => format!("{d}/llama-server"),
         None => "llama-server".to_string(),
@@ -663,5 +678,31 @@ mod tests {
         assert!(r2.model_hf.is_none());
         assert_eq!(r2.model_path.as_deref(), Some("/mnt/m.gguf"));
         assert_eq!(r2.ctx, Some(4096));
+    }
+
+    #[test]
+    fn ordered_rpc_endpoints_puts_cpu_nodes_last() {
+        use airpcez_core::cluster::{ClusterStatus, NodeEntry, NodeSnapshot};
+        use airpcez_core::model::{DeviceKind, DeviceStats, NodeStats, Role};
+        let mk = |name: &str, ep: &str, gpu: bool| NodeSnapshot {
+            entry: NodeEntry { name: name.into(), addr: ep.into() },
+            stats: Some(NodeStats {
+                name: name.into(), role: Role::Worker, ram_total_mib: 1, ram_free_mib: 1,
+                cpu_logical: 1,
+                devices: if gpu {
+                    vec![DeviceStats { name: "G".into(), kind: DeviceKind::Cuda, vram_total_mib: 8000, vram_free_mib: 8000, reliable: true }]
+                } else { vec![] },
+                rpc_endpoint: Some(ep.into()), binary_version: None, running: false, sampled_at_unix: 0,
+            }),
+            reachable: true, error: None,
+        };
+        let cluster = ClusterStatus { nodes: vec![
+            mk("cpu", "10.0.0.3:50052", false),   // CPU-only, listed FIRST
+            mk("gpu1", "10.0.0.1:50052", true),
+            mk("gpu2", "10.0.0.2:50052", true),
+        ], warnings: vec![] };
+        // GPU workers come first (in order), the CPU node moves to the end.
+        assert_eq!(super::ordered_rpc_endpoints(&cluster),
+            vec!["10.0.0.1:50052", "10.0.0.2:50052", "10.0.0.3:50052"]);
     }
 }
