@@ -49,6 +49,7 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/host/logs", get(host_logs))
         .route("/catalog", get(catalog_handler))
         .route("/suggest", post(suggest_handler))
+        .route("/config", get(get_config).post(post_config))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -354,6 +355,19 @@ async fn suggest_handler(State(s): State<AppState>, Json(req): Json<SuggestReque
     let mut plan = airpcez_core::planner::suggest_plan(&cluster, &req.meta, req.ctx);
     plan.warnings = warnings;
     Json(plan)
+}
+
+async fn get_config(State(s): State<AppState>) -> Json<crate::config::Config> {
+    Json(s.config.lock().unwrap().clone())
+}
+
+async fn post_config(State(s): State<AppState>, Json(new): Json<crate::config::Config>) -> impl IntoResponse {
+    let restart_required = new.ui_port != s.bound_ui_port;
+    let save = { let mut c = s.config.lock().unwrap(); *c = new; c.save(&s.config_path) };
+    match save {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "saved": true, "restart_required": restart_required }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "saved": false, "error": e }))).into_response(),
+    }
 }
 
 #[cfg(test)]
