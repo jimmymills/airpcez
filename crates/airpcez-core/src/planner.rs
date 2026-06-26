@@ -118,7 +118,10 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
             (meta.n_layers, Some(s), true)
         }
     } else {
-        (((gpu_pool / per_layer) as u32).min(meta.n_layers), None, false)
+        // Dense: leave ~10% GPU headroom (same margin MoE and the fit verdict use) by sizing ngl
+        // against 10/11 of the pool, so the last layer or two spill to CPU rather than overcommit
+        // the GPU (which makes llama.cpp's param-fit fail).
+        (((gpu_pool * 10 / 11 / per_layer) as u32).min(meta.n_layers), None, false)
     };
 
     let roomiest_suffix = match &roomiest {
@@ -301,6 +304,22 @@ mod tests {
             .parse().expect("thin GPU margin must offload a partial --n-cpu-moe, not 'off'");
         assert!(n > 0 && n < 48, "expected a small partial offload, got {n}");
         assert!(p.no_mmap, "--no-mmap recommended when experts live on CPU");
+    }
+
+    #[test]
+    fn dense_offloads_layers_when_gpu_margin_thin() {
+        // Dense model whose weights barely fit on GPU. Like the MoE case, the planner must leave
+        // ~10% GPU headroom (KV/compute/context) by keeping a few layers on CPU (lower ngl) rather
+        // than packing ngl = n_layers with zero margin → "failed to fit params".
+        let cluster = ClusterStatus {
+            // gpu_pool = 22500 - 1024 = 21476, only ~2% above the 21000 weights.
+            nodes: vec![node("box", 40000, vec![gpu("CUDA0", DeviceKind::Cuda, 24576, 22500, true)])],
+            warnings: vec![],
+        };
+        let meta = ModelMeta { total_mib: 21000, n_layers: 48, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 8192);
+        assert!(p.cpu_moe.is_none(), "dense models use -ngl only, not --cpu-moe");
+        assert!(p.ngl > 0 && p.ngl < 48, "thin GPU margin must keep layers on CPU, got ngl={}", p.ngl);
     }
 
     #[test]
