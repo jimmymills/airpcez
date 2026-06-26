@@ -1,4 +1,5 @@
 use airpcez_core::{cluster::NodeEntry, process::ProcessBackend, stats::StatsProvider};
+use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -21,14 +22,17 @@ pub struct AppState {
     pub bound_ui_port: u16,
 }
 
+static TEST_CONFIG_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl AppState {
     pub fn for_test(provider: Arc<dyn StatsProvider>) -> AppState {
+        let id = TEST_CONFIG_COUNTER.fetch_add(1, Ordering::Relaxed);
         AppState {
             provider,
             supervisor: Arc::new(crate::supervisor::TokioSupervisor::new()),
             config: Arc::new(std::sync::Mutex::new(crate::config::Config::default())),
             http: reqwest::Client::new(),
-            config_path: std::env::temp_dir().join("airpcez-test-config.toml"),
+            config_path: std::env::temp_dir().join(format!("airpcez-test-config-{id}.toml")),
             bound_ui_port: 8675,
         }
     }
@@ -139,6 +143,9 @@ async fn add_node(State(s): State<AppState>, Json(entry): Json<NodeEntry>)
     if !g.nodes.iter().any(|n| n.addr == entry.addr) {
         g.nodes.push(entry);
     }
+    if let Err(e) = g.save(&s.config_path) {
+        eprintln!("[airpcez] WARNING: failed to persist nodes to {}: {e}", s.config_path.display());
+    }
     Json(g.nodes.clone())
 }
 
@@ -152,6 +159,9 @@ async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
     let addr = normalize_node_addr(&req.addr);
     let mut g = s.config.lock().unwrap();
     g.nodes.retain(|n| n.addr != addr);
+    if let Err(e) = g.save(&s.config_path) {
+        eprintln!("[airpcez] WARNING: failed to persist nodes to {}: {e}", s.config_path.display());
+    }
     Json(g.nodes.clone())
 }
 
