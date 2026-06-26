@@ -42,6 +42,14 @@ pub struct Plan {
     /// Which node to run llama-server on, and why (highest-RAM node).
     #[serde(default)]
     pub host_hint: Option<String>,
+    /// Tier-3 capacity: reclaimable RAM (MiB) of CPU-only worker nodes, usable via RPC.
+    /// 0 when there are none.
+    #[serde(default)]
+    pub remote_cpu_pool_mib: u64,
+    /// rpc-server endpoints of CPU-only nodes to engage as last-resort CPU spillover.
+    /// Empty unless the model overflows GPU + host CPU (tier 3 engaged).
+    #[serde(default)]
+    pub rpc_cpu_nodes: Vec<String>,
 }
 
 /// Rough KV-cache size: ~0.125 MiB per layer per 1024 context tokens.
@@ -68,23 +76,26 @@ const CPU_HEADROOM_MIB: u64 = 2048;
 /// (e.g. the Vulkan overflow); reserves per-tier headroom; sizes -ngl to the
 /// real reliable GPU pool and verdicts the fit against GPU + CPU memory.
 pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan {
+    use crate::model::{DeviceKind, Role};
+
+    // The node that will run llama-server: first reachable Host-role node, else first reachable.
+    let host_idx = cluster.nodes.iter().position(|n| n.reachable
+            && n.stats.as_ref().is_some_and(|s| s.role == Role::Host))
+        .or_else(|| cluster.nodes.iter().position(|n| n.reachable));
+
+    // --- Tier 1: GPU pool across ALL reachable nodes (unchanged) ---
     let mut gpu_pool = 0u64;
     let mut splits: Vec<u64> = Vec::new();
     let mut exclude_notes = Vec::new();
-    let mut cpu_pool = 0u64;
     let mut roomiest: Option<(String, u64)> = None;
     for n in &cluster.nodes {
         let Some(st) = &n.stats else { continue };
         if !n.reachable { continue; }
-        let mut unified_vram = 0u64; // Apple-Silicon Metal VRAM is carved from system RAM
         for d in &st.devices {
             if d.reliable && d.vram_total_mib > 0 {
                 let usable = d.vram_free_mib.saturating_sub(GPU_HEADROOM_MIB);
                 gpu_pool += usable;
                 splits.push(usable);
-                if matches!(d.kind, crate::model::DeviceKind::Metal) {
-                    unified_vram += d.vram_free_mib;
-                }
                 if roomiest.as_ref().is_none_or(|(_, best)| usable > *best) {
                     roomiest = Some((format!("{}/{}", n.entry.name, d.name), usable));
                 }
@@ -94,20 +105,32 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
                     n.entry.name, d.name, d.vram_free_mib));
             }
         }
-        // Unified-memory nodes (Metal): don't double-count VRAM as free CPU RAM.
-        cpu_pool += st.ram_free_mib.saturating_sub(CPU_HEADROOM_MIB + unified_vram);
     }
+
+    // --- Tier 2: host CPU (host's reclaimable RAM minus its own Metal carve-out) ---
+    let host_stats = host_idx.and_then(|i| cluster.nodes[i].stats.as_ref());
+    let host_cpu = host_stats.map(|s| {
+        let host_unified: u64 = s.devices.iter()
+            .filter(|d| d.reliable && matches!(d.kind, DeviceKind::Metal))
+            .map(|d| d.vram_free_mib).sum();
+        s.ram_free_mib.saturating_sub(CPU_HEADROOM_MIB + host_unified)
+    }).unwrap_or(0);
+
+    // --- Tier 3: CPU-only nodes (reachable, not the host, no reliable GPU) ---
+    let mut remote_cpu = 0u64;
+    let mut cpu_node_eps: Vec<String> = Vec::new();
+    for (i, n) in cluster.nodes.iter().enumerate() {
+        if !n.reachable || Some(i) == host_idx { continue; }
+        let Some(st) = &n.stats else { continue };
+        if st.devices.iter().any(|d| d.reliable && d.vram_total_mib > 0) { continue; }
+        remote_cpu += st.ram_free_mib.saturating_sub(CPU_HEADROOM_MIB);
+        if let Some(ep) = &st.rpc_endpoint { cpu_node_eps.push(ep.clone()); }
+    }
+
+    // --- Layer packing (Tiers 1-2): GPU-first logic, unchanged ---
     let per_layer = (meta.total_mib / meta.n_layers.max(1) as u64).max(1);
     let tensor_split = ratio_string(&splits);
-    // MoE: keep every layer's attention/router on GPU (-ngl = n_layers) and spill only the
-    // bulky expert FFNs to CPU, sized to the GPU shortfall as a PARTIAL --n-cpu-moe count —
-    // never the all-or-nothing "all" that dumps ~all experts onto one host CPU and swaps.
-    // Dense models keep the original "fill the GPU pool" behavior.
     let (ngl, cpu_moe, no_mmap) = if meta.is_moe {
-        // An all-GPU (cpu_moe=off) plan must leave room beyond the weights for the KV cache,
-        // compute buffers, and per-device context — otherwise llama.cpp's param-fit fails.
-        // Reserve the SAME ~10% margin the fit verdict uses (below), but against the GPU pool;
-        // below that margin, spill the shortfall to CPU as a partial --n-cpu-moe count.
         let gpu_need = meta.total_mib + meta.total_mib / 10;
         let shortfall = gpu_need.saturating_sub(gpu_pool);
         if shortfall == 0 {
@@ -118,39 +141,46 @@ pub fn suggest_plan(cluster: &ClusterStatus, meta: &ModelMeta, ctx: u32) -> Plan
             (meta.n_layers, Some(s), true)
         }
     } else {
-        // Dense: leave ~10% GPU headroom (same margin MoE and the fit verdict use) by sizing ngl
-        // against 10/11 of the pool, so the last layer or two spill to CPU rather than overcommit
-        // the GPU (which makes llama.cpp's param-fit fail).
         (((gpu_pool * 10 / 11 / per_layer) as u32).min(meta.n_layers), None, false)
     };
 
+    // --- Fit verdict: GPU + host CPU first; CPU nodes only on overflow ---
+    let required = meta.total_mib + kv_mib(meta.n_layers, ctx);
+    let primary = gpu_pool + host_cpu;
     let roomiest_suffix = match &roomiest {
         Some((name, mib)) => format!(" — roomiest GPU {name} {mib} MiB"),
         None => " — no reliable GPU detected".to_string(),
     };
-
-    let required = meta.total_mib + kv_mib(meta.n_layers, ctx);
-    let pool = gpu_pool + cpu_pool;
-    let (fit, detail) = if required + required / 10 <= pool {
-        (Fit::Fits, format!("fits — ~{} MiB headroom across {} MiB GPU + {} MiB CPU{}",
-            pool.saturating_sub(required), gpu_pool, cpu_pool, roomiest_suffix))
-    } else if required <= pool {
-        (Fit::Tight, format!("tight — needs {} MiB, pool is {} MiB ({} GPU + {} CPU){}",
-            required, pool, gpu_pool, cpu_pool, roomiest_suffix))
+    let mut rpc_cpu_nodes: Vec<String> = Vec::new();
+    let (fit, detail) = if required + required / 10 <= primary {
+        (Fit::Fits, format!("fits — ~{} MiB headroom on {} MiB GPU + {} MiB host CPU{}",
+            primary.saturating_sub(required), gpu_pool, host_cpu, roomiest_suffix))
+    } else if required <= primary {
+        (Fit::Tight, format!("tight — needs {} MiB; GPU + host CPU is {} MiB ({} GPU + {} host CPU){}",
+            required, primary, gpu_pool, host_cpu, roomiest_suffix))
+    } else if required <= primary + remote_cpu {
+        rpc_cpu_nodes = cpu_node_eps;
+        (Fit::Tight, format!("tight — +{} MiB spills to CPU node(s) via RPC (slow last resort); {} GPU + {} host CPU + {} remote CPU{}",
+            required - primary, gpu_pool, host_cpu, remote_cpu, roomiest_suffix))
     } else {
-        (Fit::WontFit, format!("won't fit — needs {} MiB but pool is only {} MiB ({} GPU + {} CPU); add memory or use a smaller quant{}",
-            required, pool, gpu_pool, cpu_pool, roomiest_suffix))
+        (Fit::WontFit, format!("won't fit — needs {} MiB but GPU + host + CPU nodes is only {} MiB; use a smaller quant{}",
+            required, primary + remote_cpu, roomiest_suffix))
     };
-    // Recommend hosting llama-server on the highest-RAM node — never a small box for a big model.
-    let host_hint = cluster.nodes.iter()
-        .filter_map(|n| n.stats.as_ref().map(|s| (n.entry.name.clone(), s.ram_total_mib)))
-        .max_by_key(|&(_, ram)| ram)
-        .map(|(name, ram)| format!(
-            "run llama-server on '{name}' — most RAM ({ram} MiB); a {} MiB model will swap on any node with less",
-            meta.total_mib));
+
+    // --- host_hint: confirm the GPU host; warn if the host has no GPU ---
+    let host_hint = host_stats.map(|s| {
+        let host_has_gpu = s.devices.iter().any(|d| d.reliable && d.vram_total_mib > 0);
+        if host_has_gpu {
+            format!("run llama-server on '{}' (the host) — {} MiB free RAM + local GPU", s.name, s.ram_free_mib)
+        } else {
+            let best = roomiest.as_ref().map(|(n, _)| n.as_str()).unwrap_or("a GPU node");
+            format!("host '{}' has no GPU — run llama-server on a GPU node ({}) for GPU acceleration", s.name, best)
+        }
+    });
 
     Plan { ngl, tensor_split, cpu_moe, exclude_notes,
-        fit: FitVerdict { fit, detail }, gpu_pool_mib: gpu_pool, cpu_pool_mib: cpu_pool,
+        fit: FitVerdict { fit, detail }, gpu_pool_mib: gpu_pool, cpu_pool_mib: host_cpu,
+        remote_cpu_pool_mib: remote_cpu, rpc_cpu_nodes,
         warnings: Vec::new(),
         flash_attn: Some("on".to_string()), no_mmap, host_hint }
 }
@@ -174,6 +204,18 @@ mod tests {
     }
     fn gpu(name: &str, kind: DeviceKind, total: u64, free: u64, reliable: bool) -> DeviceStats {
         DeviceStats { name: name.into(), kind, vram_total_mib: total, vram_free_mib: free, reliable }
+    }
+    // A Host-role node (the one that would run llama-server).
+    fn host(name: &str, ram_free: u64, devices: Vec<DeviceStats>) -> NodeSnapshot {
+        let mut s = node(name, ram_free, devices);
+        if let Some(st) = s.stats.as_mut() { st.role = Role::Host; }
+        s
+    }
+    // A reachable CPU-only worker with an rpc endpoint and no GPU devices.
+    fn cpu_worker(name: &str, ram_free: u64, ep: &str) -> NodeSnapshot {
+        let mut s = node(name, ram_free, vec![]);
+        if let Some(st) = s.stats.as_mut() { st.rpc_endpoint = Some(ep.into()); }
+        s
     }
 
     #[test]
@@ -228,6 +270,7 @@ mod tests {
             gpu_pool_mib: 21000, cpu_pool_mib: 26000,
             warnings: vec![],
             flash_attn: Some("on".into()), no_mmap: true, host_hint: Some("host on big-box".into()),
+            remote_cpu_pool_mib: 12000, rpc_cpu_nodes: vec!["10.0.0.9:50052".into()],
         };
         let j = serde_json::to_string(&p).unwrap();
         assert_eq!(p, serde_json::from_str::<Plan>(&j).unwrap());
@@ -327,7 +370,7 @@ mod tests {
         let cluster = ClusterStatus {
             nodes: vec![
                 node("small-mac", 16000, vec![gpu("MTL0", DeviceKind::Metal, 12000, 10000, true)]),
-                node("big-box",   64000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+                host("big-box",   64000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
             ],
             warnings: vec![],
         };
@@ -336,5 +379,62 @@ mod tests {
         assert_eq!(p.flash_attn.as_deref(), Some("on"));
         let hint = p.host_hint.expect("host hint present");
         assert!(hint.contains("big-box"), "should recommend the highest-RAM node: {hint}");
+    }
+
+    #[test]
+    fn host_hint_prefers_gpu_host_never_cpu_only_node() {
+        // GPU host with 32 GB + a CPU-only 32 GB node. host_hint must point at the GPU host.
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 30000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 7500, true)]),
+            cpu_worker("cpu-box", 31000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 6000, n_layers: 32, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        let hint = p.host_hint.expect("host hint present");
+        assert!(hint.contains("gpu-host"), "must recommend the GPU host: {hint}");
+        assert!(!hint.contains("cpu-box"), "must never recommend the CPU-only node: {hint}");
+    }
+
+    #[test]
+    fn cpu_only_node_excluded_from_primary_pool() {
+        // 6 GB model fits on the GPU host alone; the CPU-only node's RAM must NOT inflate
+        // cpu_pool_mib (tier 2 = host CPU only) and must NOT be wired (no overflow).
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 20000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            cpu_worker("cpu-box", 31000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 6000, n_layers: 32, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        assert_eq!(p.fit.fit, Fit::Fits);
+        assert_eq!(p.cpu_pool_mib, 20000 - 2048, "cpu_pool_mib is the host's CPU only");
+        assert_eq!(p.remote_cpu_pool_mib, 31000 - 2048, "CPU node tracked as a separate tier");
+        assert!(p.rpc_cpu_nodes.is_empty(), "CPU node not engaged when model fits GPU+host");
+    }
+
+    #[test]
+    fn tier3_engages_only_on_overflow_and_wires_cpu_node() {
+        // Model bigger than GPU(7 GB) + host CPU(8 GB) ≈ 15 GB but < +CPU node(31 GB):
+        // tier 3 engages and the CPU node's endpoint is wired.
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 10000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            cpu_worker("cpu-box", 33000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 20000, n_layers: 40, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        assert_eq!(p.fit.fit, Fit::Tight);
+        assert!(p.fit.detail.contains("RPC"), "verdict names the RPC CPU spillover: {}", p.fit.detail);
+        assert_eq!(p.rpc_cpu_nodes, vec!["192.168.0.111:50052".to_string()]);
+    }
+
+    #[test]
+    fn wont_fit_beyond_all_three_tiers() {
+        let cluster = ClusterStatus { nodes: vec![
+            host("gpu-host", 10000, vec![gpu("CUDA0", DeviceKind::Cuda, 8192, 8000, true)]),
+            cpu_worker("cpu-box", 12000, "192.168.0.111:50052"),
+        ], warnings: vec![] };
+        let meta = ModelMeta { total_mib: 90000, n_layers: 80, is_moe: false };
+        let p = suggest_plan(&cluster, &meta, 4096);
+        assert_eq!(p.fit.fit, Fit::WontFit);
+        assert!(p.rpc_cpu_nodes.is_empty(), "no wiring when even CPU nodes can't make it fit");
     }
 }
