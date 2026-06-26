@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path as AxPath, Query, State,
     },
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -65,6 +65,8 @@ pub async fn run_server(port: u16, state: AppState) {
         .route("/suggest", post(suggest_handler))
         .route("/config", get(get_config).post(post_config))
         .route("/profiles", get(list_profiles).post(upsert_profile).delete(delete_profile))
+        .route("/profiles/:id/apply", post(apply_profile))
+        .route("/profiles/:id/launch", post(launch_profile))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
@@ -304,6 +306,47 @@ fn resolve_hf_in_cache(cache_dir: &str, hf: &str) -> Option<String> {
     find_gguf_in_dir(&repo_dir, quant)
 }
 
+fn launch_request_from_profile(p: &Profile) -> LaunchRequest {
+    // Treat as a local path only when it clearly is one; otherwise an HF repo ref.
+    let is_path = p.model.starts_with('/') || p.model.starts_with("./") || p.model.ends_with(".gguf");
+    LaunchRequest {
+        model_hf: if is_path { None } else { Some(p.model.clone()) },
+        model_path: if is_path { Some(p.model.clone()) } else { None },
+        ngl: p.ngl,
+        tensor_split: p.tensor_split.clone(),
+        main_gpu: p.main_gpu,
+        device: p.device.clone(),
+        cpu_moe: p.cpu_moe.clone(),
+        ctx: p.ctx,
+        hf_cache_dir: p.hf_cache_dir.clone(),
+        no_mmap: Some(p.no_mmap),
+        flash_attn: p.flash_attn.clone(),
+        threads: p.threads,
+        threads_batch: p.threads_batch,
+        cache_type_k: p.cache_type_k.clone(),
+        cache_type_v: p.cache_type_v.clone(),
+    }
+}
+
+/// Resolve a launch request's model to a ModelRef, preferring a locally-cached file.
+fn resolve_launch_model(
+    req: &LaunchRequest,
+    cache_dir: Option<&str>,
+) -> Result<airpcez_core::flags::ModelRef, String> {
+    use airpcez_core::flags::ModelRef;
+    match (req.model_hf.as_deref(), req.model_path.as_deref()) {
+        (Some(hf), _) if !hf.trim().is_empty() => {
+            let hf = hf.trim();
+            Ok(match cache_dir.and_then(|c| resolve_hf_in_cache(c, hf)) {
+                Some(local) => ModelRef::Local(local),
+                None => ModelRef::Hf(hf.to_string()),
+            })
+        }
+        (_, Some(p)) if !p.trim().is_empty() => resolve_model_path(p.trim()).map(ModelRef::Local),
+        _ => Err("model_hf or model_path required".to_string()),
+    }
+}
+
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -352,7 +395,6 @@ async fn delete_profile(State(s): State<AppState>, Json(req): Json<ProfileIdBody
 }
 
 async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) -> impl IntoResponse {
-    use airpcez_core::flags::*;
     // Extract config values before any await — never hold the Mutex across an await.
     let (llama_dir, llama_port, hf_cache_dir_cfg) = {
         let c = s.config.lock().unwrap();
@@ -361,20 +403,9 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
     // Effective HF cache dir: per-launch field overrides the host config default.
     let cache_dir = req.hf_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
         .or(hf_cache_dir_cfg.as_deref());
-    let model = match (req.model_hf.as_deref(), req.model_path.as_deref()) {
-        (Some(hf), _) if !hf.trim().is_empty() => {
-            let hf = hf.trim();
-            // Prefer a locally-cached copy (load via -m, no download) when a cache dir is set.
-            match cache_dir.and_then(|c| resolve_hf_in_cache(c, hf)) {
-                Some(local) => ModelRef::Local(local),
-                None => ModelRef::Hf(hf.to_string()),
-            }
-        }
-        (_, Some(p)) if !p.trim().is_empty() => match resolve_model_path(p.trim()) {
-            Ok(file) => ModelRef::Local(file),
-            Err(e) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": e }))).into_response(),
-        },
-        _ => return (StatusCode::BAD_REQUEST, "model_hf or model_path required".to_string()).into_response(),
+    let model = match resolve_launch_model(&req, cache_dir) {
+        Ok(m) => m,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
     let nodes = { s.config.lock().unwrap().nodes.clone() };
     let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
@@ -391,6 +422,54 @@ async fn host_launch(State(s): State<AppState>, Json(req): Json<LaunchRequest>) 
             "openai_url": format!("http://localhost:{}/v1", llama_port)
         }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+async fn apply_profile(State(s): State<AppState>, AxPath(id): AxPath<String>) -> impl IntoResponse {
+    let store = ProfileStore::load(&s.profiles_path());
+    let Some(p) = store.get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND, format!("no profile '{id}'")).into_response();
+    };
+    {
+        let mut c = s.config.lock().unwrap();
+        c.nodes = p.nodes.clone();
+        let _ = c.save(&s.config_path);
+    }
+    Json(p).into_response()
+}
+
+async fn launch_profile(State(s): State<AppState>, AxPath(id): AxPath<String>) -> impl IntoResponse {
+    let store = ProfileStore::load(&s.profiles_path());
+    let Some(p) = store.get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND, format!("no profile '{id}'")).into_response();
+    };
+    // Reconcile the host's node list to the profile, read launch config (no await under lock).
+    let (llama_dir, llama_port, hf_cache_dir_cfg) = {
+        let mut c = s.config.lock().unwrap();
+        c.nodes = p.nodes.clone();
+        let _ = c.save(&s.config_path);
+        (c.llama_dir.clone(), c.llama_port, c.hf_cache_dir.clone())
+    };
+    let req = launch_request_from_profile(&p);
+    let cache_dir = req.hf_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .or(hf_cache_dir_cfg.as_deref());
+    let model = match resolve_launch_model(&req, cache_dir) {
+        Ok(m) => m,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let nodes = { s.config.lock().unwrap().nodes.clone() };
+    let cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
+    let eps: Vec<String> = cluster.nodes.iter()
+        .filter_map(|n| n.stats.as_ref().and_then(|st| st.rpc_endpoint.clone()))
+        .collect();
+    let binary = match &llama_dir {
+        Some(d) => format!("{d}/llama-server"),
+        None => "llama-server".to_string(),
+    };
+    let spec = build_launch_spec(&req, &model, &binary, llama_port, &eps);
+    match s.supervisor.start(spec) {
+        Ok(()) => Json(serde_json::json!({ "openai_url": format!("http://localhost:{}/v1", llama_port) })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({ "error": e }))).into_response(),
     }
 }
 
@@ -550,5 +629,31 @@ mod tests {
         assert!(a.contains("--threads-batch 4"), "argv: {a}");
         assert!(a.contains("--cache-type-k q8_0"), "argv: {a}");
         assert!(a.contains("--cache-type-v q8_0"), "argv: {a}");
+    }
+
+    #[test]
+    fn profile_maps_to_launch_request() {
+        let mut p = airpcez_core::profile::Profile {
+            name: "x".into(), model: "unsloth/Q:Q4_K_M".into(), ..Default::default()
+        };
+        p.ngl = Some(99);
+        p.cpu_moe = Some("16".into());
+        p.no_mmap = true;
+        p.flash_attn = Some("on".into());
+        p.ctx = Some(8192);
+        let req = super::launch_request_from_profile(&p);
+        assert_eq!(req.model_hf.as_deref(), Some("unsloth/Q:Q4_K_M"));
+        assert!(req.model_path.is_none());
+        assert_eq!(req.ngl, Some(99));
+        assert_eq!(req.cpu_moe.as_deref(), Some("16"));
+        assert_eq!(req.no_mmap, Some(true));
+        assert_eq!(req.flash_attn.as_deref(), Some("on"));
+
+        // A .gguf path maps to model_path, not model_hf
+        let mut q = airpcez_core::profile::Profile { name: "y".into(), model: "/mnt/m.gguf".into(), ..Default::default() };
+        q.ctx = Some(4096);
+        let r2 = super::launch_request_from_profile(&q);
+        assert!(r2.model_hf.is_none());
+        assert_eq!(r2.model_path.as_deref(), Some("/mnt/m.gguf"));
     }
 }

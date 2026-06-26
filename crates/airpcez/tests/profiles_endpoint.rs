@@ -41,3 +41,32 @@ async fn profiles_crud_roundtrip() {
 
     let _ = std::fs::remove_file(&pp);
 }
+
+#[tokio::test]
+async fn apply_reconciles_nodes_and_launch_404s_on_unknown() {
+    let state = airpcez::server::AppState::for_test(Arc::new(MockStatsProvider { stats: stats() }));
+    let pp = state.profiles_path();
+    let _ = std::fs::remove_file(&pp);
+    tokio::spawn(airpcez::server::run_server(19302, state));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let c = reqwest::Client::new();
+
+    // Create a networked profile with one node
+    c.post("http://127.0.0.1:19302/profiles")
+        .json(&serde_json::json!({
+            "name": "net", "model": "repo:Q4_K_M",
+            "nodes": [{ "name": "m2", "addr": "192.168.0.125:8675" }]
+        })).send().await.unwrap();
+
+    // apply reconciles the host's node list
+    let applied = c.post("http://127.0.0.1:19302/profiles/net/apply").send().await.unwrap();
+    assert_eq!(applied.status(), 200);
+    let cfg: serde_json::Value = c.get("http://127.0.0.1:19302/config").send().await.unwrap().json().await.unwrap();
+    assert_eq!(cfg["nodes"][0]["addr"], "192.168.0.125:8675");
+
+    // launch on an unknown id -> 404
+    let unknown = c.post("http://127.0.0.1:19302/profiles/nope/launch").send().await.unwrap();
+    assert_eq!(unknown.status(), 404);
+
+    let _ = std::fs::remove_file(&pp);
+}
