@@ -7,3 +7,5 @@ airpcez-profiles.toml
 
 # serena MCP local tooling config (per-machine)
 .serena/
+
+/.llama-ios-build/

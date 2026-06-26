@@ -1,0 +1,6 @@
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+Frameworks/llama.xcframework/
+Generated/LlamaVersion.swift
