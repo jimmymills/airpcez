@@ -291,7 +291,8 @@ In Xcode (matching iPadOS 27 Beta 2 — see Development Environment in the spec)
 - Add `Sources/RpcShim/rpc_shim.c` to the target's **Compile Sources**. Expose the shim to Swift via a **bridging header**: set Build Settings → "Objective-C Bridging Header" to `Sources/App/AirpcezWorker-Bridging-Header.h` (it `#include`s `rpc_shim.h`), and add `$(SRCROOT)/Sources/RpcShim/include` to **Header Search Paths**. (A bridging header is far more reliable than a module map in a hand-built app target — RpcServer.swift therefore does NOT `import RpcShim`.)
 - Add `Generated/LlamaVersion.swift` to the target.
 - Link required system frameworks: `Metal`, `MetalKit`, `Accelerate`, `Foundation`.
-- **Build Settings → Other Linker Flags: add `-all_load`** (or `-force_load "$(SRCROOT)/Frameworks/.../libllama_full.a"`). Without this, the statically-linked Metal backend's self-registration is dead-stripped and `ggml_backend_dev_count()` sees no Metal device — the #1 silent M1 failure.
+- **Build Settings → Other Linker Flags: add `-all_load -lc++`.** `-all_load` keeps the statically-linked Metal backend's self-registration from being dead-stripped (else `ggml_backend_dev_count()` sees no Metal device — the #1 silent M1 failure). `-lc++` links the C++ standard library that llama.cpp/ggml need (the target is pure Swift+C, so Xcode won't auto-link libc++ → undefined `std::` symbols without it).
+- **Xcode 16 note:** sources live *inside* the target's synced folder (`AirpcezWorker/AirpcezWorker/`), flat, so they auto-compile — no "Add Files." Bridging header path is `AirpcezWorker/AirpcezWorker-Bridging-Header.h`; `rpc_shim.h` sits beside it and `rpc_shim.c` so includes resolve same-dir; ggml headers come from the linked xcframework.
 
 - [ ] **Step 2: Write the RPC server wrapper**
 
