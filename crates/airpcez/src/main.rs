@@ -43,7 +43,10 @@ async fn main() {
         let spec = airpcez_core::flags::rpc_server_spec(&bin, "0.0.0.0", config.rpc_port, None);
         match supervisor.start(spec) {
             Ok(()) => eprintln!("[airpcez] --worker: started rpc-server `{bin}` on 0.0.0.0:{}", config.rpc_port),
-            Err(e) => eprintln!("[airpcez] --worker: FAILED to start rpc-server `{bin}`: {e}"),
+            Err(e) => {
+                eprintln!("[airpcez] --worker: FAILED to start rpc-server `{bin}`: {e}");
+                eprintln!("[airpcez]   set `rpc_binary = \"/abs/path/to/rpc-server\"` (or `llama_dir`) in ./airpcez.toml, run from that dir");
+            }
         }
     }
 
