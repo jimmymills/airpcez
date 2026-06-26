@@ -179,8 +179,13 @@ async fn remove_node(State(s): State<AppState>, Json(req): Json<RemoveNode>)
     Json(g.nodes.clone())
 }
 
-async fn serve_index() -> axum::response::Html<&'static str> {
-    axum::response::Html(include_str!("../assets/index.html"))
+async fn serve_index() -> impl IntoResponse {
+    // no-cache so an open cockpit tab revalidates and picks up fresh JS after a deploy
+    // (the SPA otherwise keeps serving stale in-memory JS until a hard refresh).
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-cache")],
+        axum::response::Html(include_str!("../assets/index.html")),
+    )
 }
 
 #[derive(serde::Deserialize)]
