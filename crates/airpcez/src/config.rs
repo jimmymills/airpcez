@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(default)] // any omitted field falls back to Config::default() — partial tomls are fine
 pub struct Config {
     pub ui_port: u16,
     pub rpc_port: u16,
@@ -44,10 +45,17 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Config {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        match std::fs::read_to_string(path) {
+            // A malformed file used to silently fall back to defaults; warn loudly instead.
+            Ok(s) => toml::from_str(&s).unwrap_or_else(|e| {
+                eprintln!(
+                    "[airpcez] WARNING: {} failed to parse ({e}) — using defaults; your settings are NOT applied",
+                    path.display()
+                );
+                Config::default()
+            }),
+            Err(_) => Config::default(), // no config file present → compiled-in defaults
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -69,5 +77,16 @@ mod tests {
         assert_eq!(c.rpc_binary_path(), "/llama/build/bin/rpc-server");
         c.rpc_binary = Some("/custom/rpc-server".to_string());
         assert_eq!(c.rpc_binary_path(), "/custom/rpc-server"); // explicit wins over llama_dir
+    }
+
+    #[test]
+    fn partial_toml_fills_missing_fields_from_defaults() {
+        // A worker only needs to set rpc_binary — everything else should default, not fail.
+        let c: Config = toml::from_str("rpc_binary = \"/x/rpc-server\"\nnode_name = \"m2-pro\"").unwrap();
+        assert_eq!(c.rpc_binary.as_deref(), Some("/x/rpc-server"));
+        assert_eq!(c.node_name, "m2-pro");
+        assert_eq!(c.ui_port, 8675); // defaulted
+        assert_eq!(c.rpc_port, 50052); // defaulted
+        assert!(matches!(c.role, Role::Worker)); // defaulted
     }
 }
