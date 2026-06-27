@@ -12,6 +12,7 @@ struct AirpcezWorkerApp: App {
                 .environmentObject(AppServers.shared.http)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true   // keep-awake
+                    _ = UIDeviceName.current   // warm the cached name on MAIN before the background /stats handler reads it
                     let budgetMiB = Budget.miB   // live from UserDefaults (M4+)
                     rpc.start(endpoint: "0.0.0.0:50052",
                               freeBytes: budgetMiB * 1024 * 1024,
