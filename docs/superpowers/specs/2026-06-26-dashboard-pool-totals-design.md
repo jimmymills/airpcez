@@ -50,8 +50,11 @@ reachable and have stats (the host's "self" node included):
 
 Rationale for the `kind`-based rule: for this cluster, all Apple/Metal nodes are
 Apple-Silicon (unified) and the only discrete VRAM comes from the NVIDIA/`Cuda` box.
-Known edge case (not present in this cluster): an Intel Mac with a discrete GPU would
-report `Metal` yet be discrete, and would be under-counted in Pool. Documented, accepted.
+Known edge cases (neither present in this cluster, both documented and accepted): an Intel
+Mac with a discrete GPU would report `Metal` yet be discrete, and would be **under**-counted
+in Pool; conversely, an integrated/`Other` GPU backed by shared system RAM (e.g. a Vulkan
+iGPU) is treated as discrete and its "VRAM" is added to Pool, **over**-counting that shared
+RAM. Only `Metal` is assumed unified; `Cuda`/`Other` are assumed discrete.
 
 ## Data structures & wiring
 

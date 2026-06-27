@@ -184,8 +184,33 @@ mod tests {
         let j = serde_json::to_value(&resp).unwrap();
         // flatten: nodes + warnings sit at top level, alongside totals
         assert!(j.get("nodes").is_some(), "nodes should be top-level (flattened)");
+        assert!(j.get("warnings").is_some(), "warnings should be top-level (flattened)");
         assert_eq!(j["totals"]["pool_total_mib"], 16384); // Metal unified -> pool == ram
         // round-trips back into the wrapper
         assert_eq!(resp, serde_json::from_value::<ClusterResponse>(j).unwrap());
+    }
+
+    #[test]
+    fn totals_other_is_discrete_and_reachable_without_stats_is_skipped() {
+        // A node still reachable but yet to report stats (e.g. its first poll).
+        let partial = NodeSnapshot {
+            entry: NodeEntry { name: "partial".into(), addr: "partial:8675".into() },
+            stats: None, reachable: true, error: None,
+        };
+        let cs = ClusterStatus {
+            nodes: vec![
+                node("igpu", true, 8000, 4000, vec![dev(DeviceKind::Other, 2048, 1024, true)]),
+                partial,
+            ],
+            warnings: vec![],
+        };
+        let t = cluster_memory_totals(&cs);
+        // `partial` has no stats -> contributes nothing.
+        assert_eq!(t.ram_total_mib, 8000);
+        assert_eq!(t.ram_free_mib, 4000);
+        // `Other` is treated as a discrete GPU: counted in VRAM AND added to Pool.
+        assert_eq!(t.vram_total_mib, 2048);
+        assert_eq!(t.pool_total_mib, 8000 + 2048);
+        assert_eq!(t.pool_free_mib, 4000 + 1024);
     }
 }
