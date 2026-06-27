@@ -1,14 +1,14 @@
 {
-  "name": "ipad-pro-m5",
+  "name": "iPad",
   "role": "worker",
-  "ram_total_mib": 12288,
-  "ram_free_mib": 9000,
+  "ram_total_mib": 11439,
+  "ram_free_mib": 5086,
   "cpu_logical": 9,
   "devices": [
-    { "name": "MTL0", "kind": "metal", "vram_total_mib": 6144, "vram_free_mib": 6000, "reliable": true }
+    { "name": "MTL0", "kind": "metal", "vram_total_mib": 6144, "vram_free_mib": 5086, "reliable": true }
   ],
   "rpc_endpoint": "0.0.0.0:50052",
   "binary_version": "b9789",
   "running": true,
-  "sampled_at_unix": 1782460000
+  "sampled_at_unix": 1782519757
 }
