@@ -8,8 +8,6 @@ final class RpcServer: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var lastError: String?
 
-    private var thread: Thread?
-
     func start(endpoint: String, freeBytes: UInt64, totalBytes: UInt64) {
         guard !isListening else { return }
         guard rpc_shim_is_metal_available() == 1 else {
@@ -28,11 +26,5 @@ final class RpcServer: ObservableObject {
         }
         t.stackSize = 4 << 20
         t.start()
-        thread = t
     }
-
-    // v1 stop = process the server thread out of band is not graceful; the
-    // server blocks. For a clean restart we tear down the whole backend by
-    // killing listening state and re-launching the app's start path. See M4.
-    func stop() { isListening = false }
 }

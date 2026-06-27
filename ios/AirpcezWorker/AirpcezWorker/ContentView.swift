@@ -1,9 +1,12 @@
 import SwiftUI
+import Combine
 import Darwin   // exit(0) for Restart
 
 struct ContentView: View {
     @EnvironmentObject var rpc: RpcServer
+    @EnvironmentObject var http: StatsHTTPServer
     @Environment(\.scenePhase) private var scenePhase
+    @State private var thermalState = ProcessInfo.processInfo.thermalState
 
     // Initialise from persisted budget; slider range is 1–11 GiB in 0.5 steps.
     @State private var budgetGiB: Double = Double(Budget.miB) / 1024.0
@@ -15,6 +18,7 @@ struct ContentView: View {
                   systemImage: rpc.isListening ? "antenna.radiowaves.left.and.right" : "xmark.circle")
                 .foregroundStyle(rpc.isListening ? .green : .secondary)
             if let e = rpc.lastError { Text(e).foregroundStyle(.red).font(.footnote) }
+            if let e = http.lastError { Text(e).foregroundStyle(.red).font(.footnote) }
             Text("llama.cpp \(LlamaVersion.tag)").font(.caption).foregroundStyle(.secondary)
             Text("Add in cockpit:  \(LocalIP.en0 ?? "—"):8675")
                 .font(.callout.monospaced()).textSelection(.enabled)
@@ -32,9 +36,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Thermal warning
-            if ProcessInfo.processInfo.thermalState.rawValue >=
-                ProcessInfo.ThermalState.serious.rawValue {
+            // Thermal warning — reactive via NSProcessInfoThermalStateDidChange notification.
+            if thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
                 Label("Thermal throttling — performance reduced",
                       systemImage: "thermometer.high")
                     .foregroundStyle(.orange)
@@ -60,5 +63,8 @@ struct ContentView: View {
             .buttonStyle(.bordered)
         }
         .padding()
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+            thermalState = ProcessInfo.processInfo.thermalState
+        }
     }
 }

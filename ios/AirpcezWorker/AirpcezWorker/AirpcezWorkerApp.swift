@@ -9,6 +9,7 @@ struct AirpcezWorkerApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(rpc)
+                .environmentObject(AppServers.shared.http)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true   // keep-awake
                     let budgetMiB = Budget.miB   // live from UserDefaults (M4+)

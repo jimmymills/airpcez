@@ -7,6 +7,7 @@ enum SystemMemory {
     static func physicalBytes() -> UInt64 { ProcessInfo.processInfo.physicalMemory }
 }
 
+// TODO(swift6): the /stats provider closure reads MainActor state (rpc.isListening, Budget.miB) off NWConnection's background queue; hop to MainActor (or snapshot via a Sendable type) when adopting Swift 6 strict concurrency.
 func sampleStats(running: Bool, budgetMiB: UInt64) -> NodeStats {
     let mib: UInt64 = 1024 * 1024
     let ramTotal = SystemMemory.physicalBytes() / mib
@@ -32,8 +33,10 @@ func sampleStats(running: Bool, budgetMiB: UInt64) -> NodeStats {
 }
 
 enum UIDeviceName {
-    static var current: String {
-        // Stable, human-readable; falls back to a constant if name access is restricted.
-        UIDevice.current.name.isEmpty ? "ipad-worker" : UIDevice.current.name
-    }
+    // Cached once at first access — UIDevice.current.name is main-thread-affined; we
+    // avoid re-reading it from the background /stats handler on every poll.
+    static let current: String = {
+        let name = UIDevice.current.name
+        return name.isEmpty ? "ipad-worker" : name
+    }()
 }
