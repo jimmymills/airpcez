@@ -10,6 +10,8 @@ struct ContentView: View {
                 .foregroundStyle(rpc.isListening ? .green : .secondary)
             if let e = rpc.lastError { Text(e).foregroundStyle(.red).font(.footnote) }
             Text("llama.cpp \(LlamaVersion.tag)").font(.caption).foregroundStyle(.secondary)
+            Text("Add in cockpit:  \(LocalIP.en0 ?? "—"):8675")
+                .font(.callout.monospaced()).textSelection(.enabled)
         }.padding()
     }
 }
