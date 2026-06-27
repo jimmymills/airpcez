@@ -93,7 +93,7 @@ async fn ws_loop(mut socket: WebSocket, p: Arc<dyn StatsProvider>) {
     }
 }
 
-async fn cluster_handler(State(s): State<AppState>) -> Json<airpcez_core::cluster::ClusterStatus> {
+async fn cluster_handler(State(s): State<AppState>) -> Json<airpcez_core::cluster::ClusterResponse> {
     use airpcez_core::cluster::*;
     let self_stats = s.provider.sample();
     let self_version = self_stats.binary_version.clone();
@@ -105,7 +105,8 @@ async fn cluster_handler(State(s): State<AppState>) -> Json<airpcez_core::cluste
     let mut cluster = crate::poller::poll_nodes(&s.http, &nodes).await;
     cluster.warnings = version_warnings(self_version.as_deref(), &cluster.nodes);
     cluster.nodes.insert(0, self_snap);
-    Json(cluster)
+    let totals = cluster_memory_totals(&cluster);
+    Json(ClusterResponse { status: cluster, totals })
 }
 
 #[derive(serde::Deserialize)]
