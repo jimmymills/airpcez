@@ -754,6 +754,13 @@ Record the largest donation budget that loaded without a jetsam kill (informs M4
 
 ## Milestone M4 — Memory unlock + UX polish
 
+> **Corrections from M1–M3 (supersede the task text below):**
+> - **Paths:** all Swift lives FLAT in the Xcode synced folder `ios/AirpcezWorker/AirpcezWorker/` (not `Sources/App/`). `AirpcezWorker.entitlements` goes in that folder too.
+> - **Slider needs no server restart.** `/stats` reads the budget live on every poll, and `b9789`'s RPC ignores the advertised free/total — so changing the slider updates `Budget.miB` (UserDefaults) and the next `/stats` poll reflects it immediately. Make the `/stats` closure read `Budget.miB` dynamically: `http.start(port: 8675) { sampleStats(running: rpc.isListening, budgetMiB: Budget.miB) }`. Drop Task 10's "Apply & Restart" coupling — the slider just writes `Budget.miB`.
+> - **Restart button = quit the app.** The upstream `ggml_backend_rpc_start_server` blocks with no stop hook (confirmed in M1), so it cannot be torn down in-process; the M3 wedge needed a force-quit. Implement Restart as a clearly-labeled `exit(0)` ("Restart worker — closes the app; reopen from the Home Screen"), which is the only reliable recovery. Drop the `RpcServer.restart(...)` re-bind approach (it would collide on `:50052` with the still-blocked thread).
+> - **Entitlement enabling is a GUI step (user):** author `AirpcezWorker.entitlements`, but turning it on is Xcode → Signing & Capabilities → **+ Capability → Increased Memory Limit** (sets `CODE_SIGN_ENTITLEMENTS`). The subagent authors the file; the user enables the capability + rebuilds.
+> - **Current `onAppear`** uses `let budgetMiB: UInt64 = 6 * 1024`; replace with `Budget.miB` in both the `rpc.start` call and (read live) the `/stats` closure.
+
 ### Task 9: Entitlements + donation-budget wiring (single source of truth)
 
 **Files:**
