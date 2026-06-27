@@ -1,7 +1,13 @@
 import SwiftUI
+import Darwin   // exit(0) for Restart
 
 struct ContentView: View {
     @EnvironmentObject var rpc: RpcServer
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Initialise from persisted budget; slider range is 1–11 GiB in 0.5 steps.
+    @State private var budgetGiB: Double = Double(Budget.miB) / 1024.0
+
     var body: some View {
         VStack(spacing: 16) {
             Text("airpcez worker").font(.title.bold())
@@ -12,6 +18,47 @@ struct ContentView: View {
             Text("llama.cpp \(LlamaVersion.tag)").font(.caption).foregroundStyle(.secondary)
             Text("Add in cockpit:  \(LocalIP.en0 ?? "—"):8675")
                 .font(.callout.monospaced()).textSelection(.enabled)
-        }.padding()
+
+            Divider()
+
+            // Donation-budget slider — writes Budget.miB live; /stats reads it each poll.
+            VStack(spacing: 6) {
+                Slider(value: $budgetGiB, in: 1...11, step: 0.5)
+                    .onChange(of: budgetGiB) { _, newVal in
+                        Budget.miB = UInt64(newVal * 1024)
+                    }
+                Text(String(format: "Donate %.1f GiB to cluster", budgetGiB))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Thermal warning
+            if ProcessInfo.processInfo.thermalState.rawValue >=
+                ProcessInfo.ThermalState.serious.rawValue {
+                Label("Thermal throttling — performance reduced",
+                      systemImage: "thermometer.high")
+                    .foregroundStyle(.orange)
+            }
+
+            // Foreground warning
+            if scenePhase != .active {
+                Label("App backgrounded — RPC will stop",
+                      systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+            }
+
+            Divider()
+
+            // Restart = quit the process; the blocking rpc_shim_start thread cannot be
+            // torn down in-process without re-binding :50052 on a still-running thread.
+            Button(role: .destructive) {
+                exit(0)
+            } label: {
+                Label("Restart worker — closes the app; reopen from the Home Screen",
+                      systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding()
     }
 }

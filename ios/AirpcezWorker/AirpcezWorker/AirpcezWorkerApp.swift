@@ -11,12 +11,12 @@ struct AirpcezWorkerApp: App {
                 .environmentObject(rpc)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true   // keep-awake
-                    let budgetMiB: UInt64 = 6 * 1024   // M1 placeholder; slider in M4
+                    let budgetMiB = Budget.miB   // live from UserDefaults (M4+)
                     rpc.start(endpoint: "0.0.0.0:50052",
                               freeBytes: budgetMiB * 1024 * 1024,
                               totalBytes: budgetMiB * 1024 * 1024)
                     AppServers.shared.http.start(port: 8675) {
-                        sampleStats(running: rpc.isListening, budgetMiB: budgetMiB)
+                        sampleStats(running: rpc.isListening, budgetMiB: Budget.miB)
                     }
                 }
         }
