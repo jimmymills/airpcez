@@ -412,6 +412,15 @@ git commit -m "feat(ipad): minimal app starts in-process RPC+Metal server on lau
 
 ## Milestone M2 — iPad appears in the cockpit as a node
 
+> **Layout correction (post-M1 restructure):** Xcode 16/17 uses a *synchronized folder*.
+> All iOS sources — existing and new — live FLAT in `ios/AirpcezWorker/AirpcezWorker/`
+> (the target's synced folder). For every task below, create/modify files there, NOT under
+> `Sources/App/` or `Sources/RpcShim/` (those paths in the file lists are superseded). New
+> Swift files auto-compile by being placed in that folder. `RpcServer.swift` already has
+> `import Combine`. The current `AirpcezWorkerApp.swift` starts the RPC server with a
+> hardcoded 6 GiB budget (`6 << 30` bytes ⇒ `budgetMiB = 6144`); M2 reuses that same value
+> for `/stats` until M4 makes it a slider.
+
 ### Task 4: Stats provider + `NodeStats`-shaped Codable
 
 **Files:**
